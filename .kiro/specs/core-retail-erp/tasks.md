@@ -422,22 +422,22 @@ Stack:
   - Out-of-stock errors render inline on offending cart line and disable finalize
   - _Requirements: 4.1, 4.4, 4.5, 4.6, 7.4_
 
-- [ ] 7.7\* Property test — Property 2: sale totals identity
+- [x] 7.7\* Property test — Property 2: sale totals identity
   - **Property 2: Sale totals identity**
   - **Validates: Requirements 4.4, 4.5, 4.6**
   - Generate random carts (line counts, prices, tax rates, fixed/percent discounts, split payments); finalize and assert `subtotal − discount + taxTotal == grandTotal == sum(payments.amount)` on the persisted sale
 
-- [ ] 7.8\* Property test — Property 4: monotonic, unique sale serials
+- [x] 7.8\* Property test — Property 4: monotonic, unique sale serials
   - **Property 4: Strictly monotonic, unique sale serials**
   - **Validates: Requirement 4.3**
   - Run sequential and concurrent finalize batches; assert serials are pairwise unique and form a strictly increasing integer sequence when sorted by `createdAt`
 
-- [ ] 7.9\* Property test — Property 8: tax on post-discount subtotal
+- [x] 7.9\* Property test — Property 8: tax on post-discount subtotal
   - **Property 8: Tax line uses post-discount subtotal**
   - **Validates: Requirements 2.6, 4.5**
   - For random carts and discounts, assert `taxTotal == sum( line.qty * line.unitPrice * (1 − discount/subtotal) * line.taxRate )` on the persisted sale within rounding tolerance
 
-- [ ] 7.10 Checkpoint — POS green (no printer yet)
+- [x] 7.10 Checkpoint — POS green (no printer yet)
   - End-to-end finalize works in dev; serials are unique; totals identity holds; out-of-stock blocks finalize
   - Ensure all tests pass, ask the user if questions arise.
 

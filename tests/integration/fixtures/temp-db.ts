@@ -42,9 +42,23 @@
 //      in the atomicity test cannot fire.
 //
 //   6. Dynamic-imports the requested service modules (currently
-//      `purchase.service`) so they pick up the same fresh singleton.
-//      Tests use the returned references rather than top-level static
-//      imports.
+//      `purchase.service` and `pos.service`) so they pick up the same
+//      fresh singleton. Tests use the returned references rather than
+//      top-level static imports.
+//
+//      ────────────────────────────────────────────────────────────
+//      Adding a new service to the fixture: the fixture must hand
+//      back service references that bind to the per-test Prisma
+//      singleton. To expose another service, dynamic-import the
+//      module AFTER `vi.resetModules()` + the `globalThis` slot
+//      delete (Step 4) and AFTER `prisma.$connect()` (Step 5), then
+//      surface the import on the returned `TempDbFixture` shape with
+//      a typed re-export. Static `import { Foo } from '...'` lines at
+//      the top of this file are types-only — they pin the public
+//      surface — and the *runtime* binding always comes from the
+//      dynamic import inside `createTempDb`. Mirror the
+//      `PurchaseService` pattern below.
+//      ────────────────────────────────────────────────────────────
 //
 //   7. Returns `{ prisma, services, cleanup }` where `cleanup()`
 //      disconnects the client, deletes the `.db` and its `-journal /
@@ -65,6 +79,7 @@ import { join } from 'node:path';
 
 import { vi } from 'vitest';
 
+import type { POSService } from '@main/services/pos.service';
 import type { PurchaseService } from '@main/services/purchase.service';
 import type { PrismaClient } from '@prisma/client';
 
@@ -83,6 +98,15 @@ export interface TempDbFixture {
   readonly prisma: PrismaClient;
   /** Re-imported `PurchaseService` instance bound to `prisma`. */
   readonly PurchaseService: typeof PurchaseService;
+  /** Re-imported `POSService` instance bound to `prisma`.
+   *
+   *  Used by the property-tier sale-totals identity test
+   *  (`tests/property/sale-totals-identity.property.test.ts`) to drive
+   *  `finalizeSale` against a real `$transaction`. The dynamic
+   *  re-import shares the same per-test Prisma singleton as
+   *  `PurchaseService`, so seed writes done through `prisma` are
+   *  visible inside the service's transactions and vice versa. */
+  readonly POSService: typeof POSService;
   /** Disconnect the client and delete the underlying file + sidecars. */
   readonly cleanup: () => Promise<void>;
 }
@@ -286,10 +310,14 @@ export async function createTempDb(): Promise<TempDbFixture> {
   await prisma.$queryRawUnsafe('PRAGMA foreign_keys=ON;');
   await prisma.$queryRawUnsafe('PRAGMA busy_timeout=5000;');
 
-  // Step 6 — fresh import of the service under test. It reuses the
-  // singleton imported above, so seed writes done by the test
-  // through `prisma` are visible to the service and vice versa.
+  // Step 6 — fresh import of the service(s) under test. They reuse
+  // the singleton imported above, so seed writes done by the test
+  // through `prisma` are visible to the services and vice versa.
+  // Both services share the same per-test Prisma client — Prisma's
+  // module-level cache plus our `globalThis` slot guarantee a single
+  // instance per import graph.
   const purchaseModule = await import('@main/services/purchase.service.js');
+  const posModule = await import('@main/services/pos.service.js');
 
   // Step 7 — cleanup closure. Captures `prisma`, `dbPath`, and the
   // previous DATABASE_URL by reference so the test does not have to
@@ -329,6 +357,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
   return {
     prisma,
     PurchaseService: purchaseModule.PurchaseService,
+    POSService: posModule.POSService,
     cleanup,
   };
 }
