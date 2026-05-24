@@ -114,6 +114,18 @@ function pageOf<T>(rows: readonly T[]): ListResponse<T> {
   return { rows, nextCursor: null };
 }
 
+function makeCustomer(
+  overrides: Partial<CustomerDTO> = {},
+): CustomerDTO {
+  return {
+    id: 'c-1',
+    name: 'Acme Walk-in',
+    phone: '555-0100',
+    createdAt: '2026-05-24T12:00:00.000Z',
+    ...overrides,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // API stub builder
 // ---------------------------------------------------------------------------
@@ -123,12 +135,14 @@ interface BuiltStub {
   readonly posScan: ReturnType<typeof vi.fn>;
   readonly posFinalize: ReturnType<typeof vi.fn>;
   readonly customersList: ReturnType<typeof vi.fn>;
+  readonly customersUpsert: ReturnType<typeof vi.fn>;
 }
 
 function buildStub(opts: {
   scanByBarcode?: Readonly<Record<string, ProductDTO | null>>;
   finalize?: ReturnType<typeof vi.fn>;
   customers?: readonly CustomerDTO[];
+  customersUpsert?: ReturnType<typeof vi.fn>;
 }): BuiltStub {
   const map = opts.scanByBarcode ?? {};
   const posScan = vi.fn((req: { barcode: string }) => {
@@ -155,12 +169,17 @@ function buildStub(opts: {
     Promise.resolve(Ok(pageOf(opts.customers ?? []))),
   );
 
+  const customersUpsert =
+    opts.customersUpsert ??
+    vi.fn(() => Promise.resolve(Ok(makeCustomer())));
+
   const stub: Partial<Api> = {
     'pos:scan': posScan,
     'pos:finalize': posFinalize,
     'customers:list': customersList,
+    'customers:upsert': customersUpsert,
   };
-  return { stub, posScan, posFinalize, customersList };
+  return { stub, posScan, posFinalize, customersList, customersUpsert };
 }
 
 // ---------------------------------------------------------------------------
@@ -657,5 +676,307 @@ describe('<POSPage /> — server error mapping', () => {
         /customer or product not found/i,
       );
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Tests — customer attach (task 9.3)
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — customer attach', () => {
+  /**
+   * Helper: build a cart with one product, one cash payment matching
+   * the grand total so the Finalize button is enabled. Used by every
+   * customer-attach test as the common baseline.
+   */
+  async function setupCartReadyToFinalize(opts: {
+    user: ReturnType<typeof userEvent.setup>;
+    product: ProductDTO;
+  }): Promise<void> {
+    await scanBarcode({ user: opts.user, barcode: opts.product.barcode ?? '' });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${opts.product.id}-quantity`),
+      ).toHaveValue('1');
+    });
+    await opts.user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+  }
+
+  it('sends customerId on finalize when a customer is selected from the picker', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const customer = makeCustomer({ id: 'c-7', name: 'Repeat Buyer' });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-1',
+          serialNo: 'INV-000001',
+          sale: makeSaleDTO({
+            customerId: customer.id,
+            customerName: customer.name,
+          }),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      customers: [customer],
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await setupCartReadyToFinalize({ user, product });
+
+    // Type a search term to trigger customers:list, then pick the
+    // returned customer.
+    const search = screen.getByTestId('pos-customer-search');
+    await user.type(search, 'Repeat');
+
+    // The debounce window is 250 ms; advance by waiting for the
+    // result button to render rather than firing real timers (the
+    // suite uses real timers per the afterEach).
+    await waitFor(() => {
+      expect(built.customersList).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-customer-result-${customer.id}`),
+      ).toBeInTheDocument();
+    });
+
+    await user.click(screen.getByTestId(`pos-customer-result-${customer.id}`));
+
+    // The selected-customer summary now reads the picked row's name
+    // and phone, and the search/results tree is gone.
+    expect(screen.getByTestId('pos-customer-selected-name')).toHaveTextContent(
+      'Repeat Buyer',
+    );
+    expect(screen.queryByTestId('pos-customer-results')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+    const payload = finalize.mock.calls[0]?.[0] as
+      | FinalizeSaleInput
+      | undefined;
+    expect(payload).not.toBeUndefined();
+    if (payload === undefined) throw new Error('finalize payload missing');
+    expect(payload.customerId).toBe('c-7');
+  });
+
+  it('sends customerId: null on finalize when the customer is cleared (walk-in)', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const customer = makeCustomer({ id: 'c-7', name: 'Repeat Buyer' });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-1',
+          serialNo: 'INV-000001',
+          sale: makeSaleDTO(),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      customers: [customer],
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await setupCartReadyToFinalize({ user, product });
+
+    // Pick the customer first.
+    const search = screen.getByTestId('pos-customer-search');
+    await user.type(search, 'Repeat');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-customer-result-${customer.id}`),
+      ).toBeInTheDocument();
+    });
+    await user.click(screen.getByTestId(`pos-customer-result-${customer.id}`));
+    expect(screen.getByTestId('pos-customer-selected')).toBeInTheDocument();
+
+    // Then detach (walk-in). The selected-summary disappears and the
+    // search input is back.
+    await user.click(screen.getByTestId('pos-customer-clear'));
+    expect(screen.queryByTestId('pos-customer-selected')).not.toBeInTheDocument();
+    expect(screen.getByTestId('pos-customer-search')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+    const payload = finalize.mock.calls[0]?.[0] as
+      | FinalizeSaleInput
+      | undefined;
+    expect(payload).not.toBeUndefined();
+    if (payload === undefined) throw new Error('finalize payload missing');
+    expect(payload.customerId).toBeNull();
+  });
+
+  it('walk-in default sends customerId: null when no customer is ever picked', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-1',
+          serialNo: 'INV-000001',
+          sale: makeSaleDTO(),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await setupCartReadyToFinalize({ user, product });
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+    const payload = finalize.mock.calls[0]?.[0] as
+      | FinalizeSaleInput
+      | undefined;
+    expect(payload).not.toBeUndefined();
+    if (payload === undefined) throw new Error('finalize payload missing');
+    expect(payload.customerId).toBeNull();
+  });
+
+  it('inline + New customer creates and attaches the customer mid-checkout', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const created = makeCustomer({
+      id: 'c-new',
+      name: 'Fresh Walk-in',
+      phone: '555-9999',
+    });
+    const customersUpsert = vi.fn(() => Promise.resolve(Ok(created)));
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-1',
+          serialNo: 'INV-000001',
+          sale: makeSaleDTO({
+            customerId: created.id,
+            customerName: created.name,
+          }),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      customersUpsert,
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await setupCartReadyToFinalize({ user, product });
+
+    // Open the inline form, fill it, submit.
+    await user.click(screen.getByTestId('pos-customer-new'));
+    expect(screen.getByTestId('pos-customer-new-form')).toBeInTheDocument();
+
+    await user.type(screen.getByTestId('pos-customer-new-name'), 'Fresh Walk-in');
+    await user.type(screen.getByTestId('pos-customer-new-phone'), '555-9999');
+    await user.click(screen.getByTestId('pos-customer-new-submit'));
+
+    await waitFor(() => {
+      expect(customersUpsert).toHaveBeenCalledTimes(1);
+    });
+    expect(customersUpsert.mock.calls[0]?.[0]).toEqual({
+      name: 'Fresh Walk-in',
+      phone: '555-9999',
+    });
+
+    // The created customer is now selected.
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-customer-selected-name')).toHaveTextContent(
+        'Fresh Walk-in',
+      );
+    });
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+    const payload = finalize.mock.calls[0]?.[0] as
+      | FinalizeSaleInput
+      | undefined;
+    expect(payload).not.toBeUndefined();
+    if (payload === undefined) throw new Error('finalize payload missing');
+    expect(payload.customerId).toBe('c-new');
+  });
+
+  it('surfaces a permission-denied error inline when customers:upsert returns FORBIDDEN', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const customersUpsert = vi.fn(() =>
+      Promise.resolve(Err('FORBIDDEN', { reason: 'rbac' })),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      customersUpsert,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-customer-new'));
+    await user.type(screen.getByTestId('pos-customer-new-name'), 'Anyone');
+    await user.click(screen.getByTestId('pos-customer-new-submit'));
+
+    await waitFor(() => {
+      expect(customersUpsert).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-customer-new-error')).toHaveTextContent(
+        /permission/i,
+      );
+    });
+    // Form stays open so the cashier can cancel out without losing the cart.
+    expect(screen.getByTestId('pos-customer-new-form')).toBeInTheDocument();
+    expect(screen.queryByTestId('pos-customer-selected')).not.toBeInTheDocument();
   });
 });

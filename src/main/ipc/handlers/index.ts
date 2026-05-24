@@ -23,6 +23,7 @@
 
 export { registerAuthHandlers } from './auth.js';
 export { registerCategoriesHandlers } from './categories.js';
+export { registerCustomersHandlers } from './customers.js';
 export { registerInventoryHandlers } from './inventory.js';
 export { registerPosHandlers } from './pos.js';
 export { registerProductsHandlers } from './products.js';

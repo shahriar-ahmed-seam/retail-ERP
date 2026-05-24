@@ -483,25 +483,25 @@ Stack:
 
 ### Phase 9 — Customer management
 
-- [ ] 9.1 CustomerService
+- [x] 9.1 CustomerService
   - Implement `customer.service.ts` with `list(req)` calling `paginateCursor` on `Customer` (sort `name ASC, id ASC`; filter `phonePrefix`), `upsert`, `detail(id)` returning paginated sale history (cursor on `(createdAt DESC, id)`)
   - Wire `customers:list`, `customers:upsert`, `customers:detail`
   - _Requirements: 7.1, 7.3, 16.1, 16.3, 16.4_
 
-- [ ] 9.2 Customer pages
+- [x] 9.2 Customer pages
   - `CustomersListPage` (virtualized via `<VirtualizedTable>` with cursor pagination on `customers:list`, debounced phone-prefix search), `CustomerFormPage`, `CustomerDetailPage` (paginated sale history)
   - Read access for Admin and Cashier; write access for Admin only
   - _Requirements: 7.1, 7.3, 8.3, 16.1, 16.3, 16.5_
 
-- [ ] 9.3 Attach customer to sale flow
+- [x] 9.3 Attach customer to sale flow
   - Add the customer-attach control to POS (already stubbed in 7.6); on finalize, `customerId` is sent and persisted on the `Sale` row; walk-in sales send `null`
   - _Requirements: 7.2, 7.4_
 
-- [ ] 9.4\* Integration test — customer history reflects sales
+- [x] 9.4\* Integration test — customer history reflects sales
   - Create customer, finalize two sales attached to that customer; assert `customer:detail` returns both sales ordered by date desc
   - _Requirements: 7.3_
 
-- [ ] 9.5 Checkpoint — customers green
+- [x] 9.5 Checkpoint — customers green
   - Customer create/list/detail works; sales correctly attach (or omit) customer
   - Ensure all tests pass, ask the user if questions arise.
 

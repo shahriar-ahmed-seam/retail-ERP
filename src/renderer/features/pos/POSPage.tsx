@@ -33,11 +33,15 @@
  *     `useApi()`.
  *
  * Customer attach is wired against the existing `customers:list`
- * channel so a cashier can pick a registered customer; the
- * "create new customer" path is deferred to Phase 9 (task 7.6 spec).
- * Walk-in sales send `customerId: null` on the wire.
+ * channel so a cashier can pick a registered customer. An inline
+ * "+ New customer" form sits next to the search input — submitting
+ * it calls `customers:upsert` and on success selects the new
+ * customer as the attached one (the IPC matrix authorizes
+ * `customers:upsert` for both Admin and Cashier per Req 7.2 so the
+ * POS can capture a walk-in's contact details mid-checkout). Walk-in
+ * sales send `customerId: null` on the wire (Req 7.4).
  *
- * Validates: Requirements 4.1, 4.4, 4.5, 4.6, 7.4, 14.3.
+ * Validates: Requirements 4.1, 4.4, 4.5, 4.6, 7.2, 7.4, 14.3.
  */
 
 import Decimal from 'decimal.js';
@@ -629,6 +633,76 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     refocusScanner();
   }, [refocusScanner]);
 
+  // ----- Inline customer create (task 9.3) ------------------------------
+  // Cashier-friendly path for capturing a walk-in customer's details
+  // mid-checkout. The IPC matrix authorizes `customers:upsert` for
+  // both Admin and Cashier per Req 7.2 ("Cashier attaches a customer
+  // to a sale"), so this stays inside the role surface — Cashiers
+  // can both pick existing customers and add new ones without
+  // leaving the POS screen. Errors surface inline below the form
+  // (separate from the page-level finalize banner) so a busted
+  // create attempt doesn't blow away the cart's error context.
+  const [creatingCustomer, setCreatingCustomer] = useState(false);
+  const [newCustomerName, setNewCustomerName] = useState('');
+  const [newCustomerPhone, setNewCustomerPhone] = useState('');
+  const [creatingCustomerSubmitting, setCreatingCustomerSubmitting] =
+    useState(false);
+  const [createCustomerError, setCreateCustomerError] =
+    useState<ErrorEnvelope | null>(null);
+
+  const openCreateCustomer = useCallback((): void => {
+    setCreatingCustomer(true);
+    setNewCustomerName('');
+    setNewCustomerPhone('');
+    setCreateCustomerError(null);
+  }, []);
+
+  const cancelCreateCustomer = useCallback((): void => {
+    setCreatingCustomer(false);
+    setNewCustomerName('');
+    setNewCustomerPhone('');
+    setCreateCustomerError(null);
+    refocusScanner();
+  }, [refocusScanner]);
+
+  const submitCreateCustomer = useCallback((): void => {
+    const trimmedName = newCustomerName.trim();
+    if (trimmedName.length === 0) {
+      // Mirror the service's `Err('VALIDATION', { field: 'name' })`
+      // shape so the inline error renderer reads exactly the same
+      // surface as the server path.
+      setCreateCustomerError({
+        code: 'VALIDATION',
+        message: 'Name is required.',
+        details: { field: 'name' },
+      });
+      return;
+    }
+    const trimmedPhone = newCustomerPhone.trim();
+    setCreatingCustomerSubmitting(true);
+    setCreateCustomerError(null);
+    void (async () => {
+      try {
+        const result = await api['customers:upsert']({
+          name: trimmedName,
+          phone: trimmedPhone === '' ? null : trimmedPhone,
+        });
+        if (result.ok) {
+          // Re-use the existing select path so search state, query
+          // input, and result list all reset uniformly.
+          selectCustomer(result.value);
+          setCreatingCustomer(false);
+          setNewCustomerName('');
+          setNewCustomerPhone('');
+        } else {
+          setCreateCustomerError(result.error);
+        }
+      } finally {
+        setCreatingCustomerSubmitting(false);
+      }
+    })();
+  }, [api, newCustomerName, newCustomerPhone, selectCustomer]);
+
   // ----- Payment mutations ----------------------------------------------
   const addPayment = useCallback(
     (method: PaymentMethod): void => {
@@ -916,6 +990,16 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
           onSelect={selectCustomer}
           onClear={clearCustomer}
           idPrefix={idPrefix}
+          creating={creatingCustomer}
+          newCustomerName={newCustomerName}
+          newCustomerPhone={newCustomerPhone}
+          createSubmitting={creatingCustomerSubmitting}
+          createError={createCustomerError}
+          onOpenCreate={openCreateCustomer}
+          onCancelCreate={cancelCreateCustomer}
+          onChangeNewName={setNewCustomerName}
+          onChangeNewPhone={setNewCustomerPhone}
+          onSubmitCreate={submitCreateCustomer}
         />
       </aside>
 
@@ -1311,6 +1395,21 @@ interface CustomerAttachProps {
   readonly onSelect: (customer: CustomerDTO) => void;
   readonly onClear: () => void;
   readonly idPrefix: string;
+  // Inline-create form state + handlers (task 9.3). Surfacing the
+  // entire form state through props keeps the component pure for
+  // unit tests; the parent owns the inputs so a render that
+  // succeeded an upsert can re-use the existing `selectCustomer`
+  // path to apply the freshly-created row to the cart.
+  readonly creating: boolean;
+  readonly newCustomerName: string;
+  readonly newCustomerPhone: string;
+  readonly createSubmitting: boolean;
+  readonly createError: ErrorEnvelope | null;
+  readonly onOpenCreate: () => void;
+  readonly onCancelCreate: () => void;
+  readonly onChangeNewName: (next: string) => void;
+  readonly onChangeNewPhone: (next: string) => void;
+  readonly onSubmitCreate: () => void;
 }
 
 function CustomerAttach({
@@ -1322,12 +1421,29 @@ function CustomerAttach({
   onSelect,
   onClear,
   idPrefix,
+  creating,
+  newCustomerName,
+  newCustomerPhone,
+  createSubmitting,
+  createError,
+  onOpenCreate,
+  onCancelCreate,
+  onChangeNewName,
+  onChangeNewPhone,
+  onSubmitCreate,
 }: CustomerAttachProps): ReactElement {
-  const showResults = customer === null && query.trim().length > 0;
+  const showResults =
+    customer === null && !creating && query.trim().length > 0;
+  // Pull the inline-create form's `field` detail off the envelope so
+  // the validation message can highlight the offending input.
+  const createErrorField =
+    createError !== null && createError.code === 'VALIDATION'
+      ? readValidationDetails(createError).field
+      : null;
   return (
     <div data-testid="pos-customer-attach">
       <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Customer</h2>
-      {customer === null ? (
+      {customer === null && !creating ? (
         <div>
           <input
             id={`${idPrefix}-customer-search`}
@@ -1345,6 +1461,23 @@ function CustomerAttach({
               boxSizing: 'border-box',
             }}
           />
+          <button
+            type="button"
+            data-testid="pos-customer-new"
+            onClick={onOpenCreate}
+            style={{
+              marginTop: '0.25rem',
+              padding: '0.375rem 0.5rem',
+              fontSize: '0.875rem',
+              background: 'transparent',
+              border: '1px dashed #999',
+              borderRadius: 4,
+              cursor: 'pointer',
+              width: '100%',
+            }}
+          >
+            + New customer
+          </button>
           {showResults ? (
             <ul
               role="listbox"
@@ -1408,7 +1541,106 @@ function CustomerAttach({
             </ul>
           ) : null}
         </div>
-      ) : (
+      ) : creating ? (
+        <form
+          data-testid="pos-customer-new-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSubmitCreate();
+          }}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.5rem',
+            padding: '0.5rem',
+            border: '1px solid #cde',
+            background: '#f3f8ff',
+            borderRadius: 4,
+          }}
+        >
+          <label
+            htmlFor={`${idPrefix}-new-customer-name`}
+            style={{ fontSize: '0.875rem', fontWeight: 600 }}
+          >
+            Name
+          </label>
+          <input
+            id={`${idPrefix}-new-customer-name`}
+            data-testid="pos-customer-new-name"
+            type="text"
+            autoComplete="off"
+            value={newCustomerName}
+            onChange={(e) => {
+              onChangeNewName(e.target.value);
+            }}
+            aria-invalid={createErrorField === 'name' ? true : undefined}
+            style={{
+              padding: '0.5rem',
+              boxSizing: 'border-box',
+              borderColor: createErrorField === 'name' ? '#c33' : undefined,
+            }}
+          />
+          <label
+            htmlFor={`${idPrefix}-new-customer-phone`}
+            style={{ fontSize: '0.875rem', fontWeight: 600 }}
+          >
+            Phone (optional)
+          </label>
+          <input
+            id={`${idPrefix}-new-customer-phone`}
+            data-testid="pos-customer-new-phone"
+            type="tel"
+            autoComplete="off"
+            inputMode="tel"
+            value={newCustomerPhone}
+            onChange={(e) => {
+              onChangeNewPhone(e.target.value);
+            }}
+            aria-invalid={createErrorField === 'phone' ? true : undefined}
+            style={{
+              padding: '0.5rem',
+              boxSizing: 'border-box',
+              borderColor: createErrorField === 'phone' ? '#c33' : undefined,
+            }}
+          />
+          {createError !== null ? (
+            <div
+              role="alert"
+              data-testid="pos-customer-new-error"
+              style={{
+                color: '#c33',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+              }}
+            >
+              {createError.code === 'VALIDATION' && createErrorField !== null
+                ? createError.message
+                : createError.code === 'FORBIDDEN'
+                  ? 'You do not have permission to add customers.'
+                  : createError.message}
+            </div>
+          ) : null}
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              type="submit"
+              data-testid="pos-customer-new-submit"
+              disabled={createSubmitting}
+              style={{ padding: '0.375rem 0.5rem', flex: 1 }}
+            >
+              {createSubmitting ? 'Creating…' : 'Create & attach'}
+            </button>
+            <button
+              type="button"
+              data-testid="pos-customer-new-cancel"
+              onClick={onCancelCreate}
+              disabled={createSubmitting}
+              style={{ padding: '0.375rem 0.5rem' }}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : customer !== null ? (
         <div
           data-testid="pos-customer-selected"
           style={{
@@ -1439,7 +1671,7 @@ function CustomerAttach({
             Change
           </button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

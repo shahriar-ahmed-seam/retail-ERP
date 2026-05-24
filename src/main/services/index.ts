@@ -17,6 +17,8 @@ export {
 
 export { CategoryService } from './category.service.js';
 
+export { CustomerService } from './customer.service.js';
+
 export {
   applyMovement,
   InventoryService,

@@ -7,4 +7,5 @@
 // entry (and the upcoming role-aware shell in task 13.1) can import
 // pages from `@renderer/features` directly.
 
+export * from './customers';
 export * from './settings';

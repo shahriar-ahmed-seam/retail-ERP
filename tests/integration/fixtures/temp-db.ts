@@ -79,6 +79,7 @@ import { join } from 'node:path';
 
 import { vi } from 'vitest';
 
+import type { CustomerService } from '@main/services/customer.service';
 import type { POSService } from '@main/services/pos.service';
 import type { PurchaseService } from '@main/services/purchase.service';
 import type { PrismaClient } from '@prisma/client';
@@ -107,6 +108,14 @@ export interface TempDbFixture {
    *  `PurchaseService`, so seed writes done through `prisma` are
    *  visible inside the service's transactions and vice versa. */
   readonly POSService: typeof POSService;
+  /** Re-imported `CustomerService` instance bound to `prisma`.
+   *
+   *  Exposed alongside `PurchaseService` and `POSService` for parity
+   *  — Phase 9 task 9.4 (the customer flow integration test) will
+   *  exercise `list`, `upsert`, and `detail` through this reference,
+   *  and this fixture is the only place that hands services bound to
+   *  the per-test Prisma client. */
+  readonly CustomerService: typeof CustomerService;
   /** Disconnect the client and delete the underlying file + sidecars. */
   readonly cleanup: () => Promise<void>;
 }
@@ -318,6 +327,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
   // instance per import graph.
   const purchaseModule = await import('@main/services/purchase.service.js');
   const posModule = await import('@main/services/pos.service.js');
+  const customerModule = await import('@main/services/customer.service.js');
 
   // Step 7 — cleanup closure. Captures `prisma`, `dbPath`, and the
   // previous DATABASE_URL by reference so the test does not have to
@@ -358,6 +368,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
     prisma,
     PurchaseService: purchaseModule.PurchaseService,
     POSService: posModule.POSService,
+    CustomerService: customerModule.CustomerService,
     cleanup,
   };
 }

@@ -8,6 +8,7 @@ import { connect, disconnect } from '@main/db/index.js';
 import {
   registerAuthHandlers,
   registerCategoriesHandlers,
+  registerCustomersHandlers,
   registerInventoryHandlers,
   registerPosHandlers,
   registerProductsHandlers,
@@ -62,6 +63,7 @@ async function bootstrapMain(): Promise<void> {
   registerInventoryHandlers();
   registerReportsHandlers();
   registerSuppliersHandlers();
+  registerCustomersHandlers();
   registerPurchasesHandlers();
   registerPosHandlers();
   registerSettingsHandlers();
