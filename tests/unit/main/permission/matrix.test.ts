@@ -121,6 +121,8 @@ const CASHIER_ALLOW: readonly IpcChannel[] = [
   // Product reads for POS lookup.
   'products:list',
   'products:count',
+  // Category reads for product display.
+  'categories:list',
   // POS flow.
   'pos:scan',
   'pos:finalize',
@@ -148,6 +150,9 @@ const CASHIER_ALLOW: readonly IpcChannel[] = [
 const CASHIER_DENY: readonly IpcChannel[] = [
   // Pricing / catalog writes (Req 2.4, 8.3).
   'products:upsert',
+  // Category management (Req 2.5, 8.3).
+  'categories:upsert',
+  'categories:delete',
   // Purchase workflow (Req 5, 8.2).
   'purchases:list',
   'purchases:count',

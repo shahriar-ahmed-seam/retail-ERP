@@ -14,6 +14,8 @@ export type {
   AuditSortKey,
 } from './audit-log.js';
 
+export type { CategoryDTO, CategoryInput } from './category.js';
+
 export type {
   CustomerDTO,
   CustomerFilter,

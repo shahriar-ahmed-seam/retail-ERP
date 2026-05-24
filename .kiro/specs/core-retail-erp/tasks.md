@@ -256,22 +256,22 @@ Stack:
 
 ### Phase 4 — Product and category management
 
-- [~] 4.1 CategoryService and IPC
+- [x] 4.1 CategoryService and IPC
   - Implement `category.service.ts` (kept inside `product.service.ts` per design) with `list()`, `upsert(input)`, `delete(id)` (delete only if no products reference)
   - Wire `categories:list`, `categories:upsert`, `categories:delete`
   - _Requirements: 2.5_
 
-- [~] 4.2 ProductService — list, get, upsert
+- [x] 4.2 ProductService — list, get, upsert
   - Implement `product.service.ts` with `list({search})`, `getById`, `getByBarcode`, `upsert(input)`
   - Enforce unique `sku` and unique `barcode` (when present) via Prisma constraints; map unique violations to `Err('UNIQUE_VIOLATION')` with field details
   - On creation, also create the `Inventory` row with `onHand = 0`
   - _Requirements: 2.1, 2.2, 2.3, 2.5, 7 (read-only access)_
 
-- [~] 4.3 ProductService — audit price changes
+- [x] 4.3 ProductService — audit price changes
   - When `buyPrice` or `sellPrice` change on update, write an `audit_logs` row of type `price.change` inside the same `$transaction` as the product update, capturing previous and new values
   - _Requirements: 2.4, 13.1_
 
-- [~] 4.4 Product list, create, edit pages
+- [x] 4.4 Product list, create, edit pages
   - `src/renderer/features/products/`: `ProductsListPage.tsx` (search + table), `ProductFormPage.tsx` (create + edit)
   - List page uses cursor pagination via `products:list` (default `pageSize: 50`, max 200) and renders rows through the shared `<VirtualizedTable>` component (task 4.8) backed by `react-window`
   - Search input is debounced 250 ms before issuing the next `products:list` request; filter changes reset the cursor
@@ -279,7 +279,7 @@ Stack:
   - Cashier role gets read-only list; create/edit hidden
   - _Requirements: 2.1, 2.2, 2.3, 2.5, 8.3, 16.1, 16.3, 16.5_
 
-- [~] 4.8 Shared `<VirtualizedTable>` component
+- [x] 4.8 Shared `<VirtualizedTable>` component
   - Implement `src/renderer/components/VirtualizedTable.tsx` wrapping `react-window`'s `FixedSizeList` (or `VariableSizeList` where row heights differ) and exposing a typed `usePaginatedList(channel, params)` data hook that drives any `*:list` channel under the `ListRequest`/`ListResponse` envelope
   - Hook owns: cursor state, `pageSize` (default 50, capped 200), debounced search forwarding (250 ms), in-flight request cancellation on filter change, append-on-scroll page accumulation, and visible-window slicing for `react-window`
   - Optional `withCount` prop renders a totals strip via the companion `*:count` channel

@@ -1,4 +1,19 @@
-// Placeholder barrel for renderer components.
-// `LowStockBanner.tsx` and shared `ui/` primitives are added as features
-// land (Phases 3 onward).
-export {};
+// Renderer-shared components barrel.
+//
+// `VirtualizedTable` (and its data hook `usePaginatedList`) is the reuse
+// target for every paginated list view in the app — products, customers,
+// suppliers, sales, purchases, inventory_movements, audit, journal, and
+// any reports preview that can exceed 200 rows (Req 16.5).
+
+export {
+  usePaginatedList,
+  VirtualizedTable,
+  type CountChannelFor,
+  type ListFilterOf,
+  type ListRowOf,
+  type ListSortOf,
+  type PaginatedListChannel,
+  type UsePaginatedListParams,
+  type UsePaginatedListResult,
+  type VirtualizedTableProps,
+} from './VirtualizedTable';

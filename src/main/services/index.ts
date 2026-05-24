@@ -2,8 +2,10 @@
 //
 // Individual services are added per phase:
 //   - auth.service.ts (Phase 3, task 3.1)
+//   - category.service.ts (Phase 4, task 4.1)
+//   - product.service.ts (Phase 4, task 4.2)
 //
-// Future additions: product, inventory, pos, purchase, supplier, customer,
+// Future additions: inventory, pos, purchase, supplier, customer,
 // permission, report, backup, audit.
 
 export {
@@ -11,3 +13,7 @@ export {
   BCRYPT_COST_FACTOR,
   type CreateInitialAdminResult,
 } from './auth.service.js';
+
+export { CategoryService } from './category.service.js';
+
+export { ProductService } from './product.service.js';

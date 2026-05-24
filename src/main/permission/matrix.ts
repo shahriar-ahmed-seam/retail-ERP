@@ -103,6 +103,13 @@ export const RBAC: Readonly<Record<keyof IpcContract, readonly SessionRole[]>> =
   'products:count': ALL_ROLES,
   'products:upsert': ADMIN_ONLY,
 
+  // ----- Categories -------------------------------------------------------
+  // Cashiers see categories for product display (POS lookup, list filter);
+  // only Admin manages the catalog reference table (Req 2.5, 8.3).
+  'categories:list': ALL_ROLES,
+  'categories:upsert': ADMIN_ONLY,
+  'categories:delete': ADMIN_ONLY,
+
   // ----- POS --------------------------------------------------------------
   'pos:scan': ALL_ROLES,
   'pos:finalize': ALL_ROLES,

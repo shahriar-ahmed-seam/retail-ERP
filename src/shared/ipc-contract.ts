@@ -33,6 +33,8 @@ import type {
   AuditFilter,
   AuditLogDTO,
   AuditSortKey,
+  CategoryDTO,
+  CategoryInput,
   CustomerDTO,
   CustomerFilter,
   CustomerInput,
@@ -259,6 +261,22 @@ export interface IpcContract {
     res: ProductDTO;
   };
 
+  // ----- Categories -------------------------------------------------------
+  // Small reference table — not paginated. Cashiers may read for product
+  // display; only Admin manages catalog (Req 2.5, 8.3).
+  'categories:list': {
+    req: void;
+    res: { rows: readonly CategoryDTO[] };
+  };
+  'categories:upsert': {
+    req: CategoryInput;
+    res: CategoryDTO;
+  };
+  'categories:delete': {
+    req: { id: string };
+    res: void;
+  };
+
   // ----- POS --------------------------------------------------------------
   'pos:scan': {
     req: { barcode: string };
@@ -476,6 +494,11 @@ export const IPC_CHANNELS = [
   'products:list',
   'products:count',
   'products:upsert',
+
+  // Categories
+  'categories:list',
+  'categories:upsert',
+  'categories:delete',
 
   // POS
   'pos:scan',

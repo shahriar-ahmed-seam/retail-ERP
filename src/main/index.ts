@@ -5,7 +5,11 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { sessionStore } from '@main/auth/session-store.js';
 import { wireWindowSessionLifecycle } from '@main/auth/window-lifecycle.js';
 import { connect, disconnect } from '@main/db/index.js';
-import { registerAuthHandlers } from '@main/ipc/handlers/index.js';
+import {
+  registerAuthHandlers,
+  registerCategoriesHandlers,
+  registerProductsHandlers,
+} from '@main/ipc/handlers/index.js';
 import { bindIpcHandlers } from '@main/ipc/index.js';
 
 /**
@@ -47,7 +51,9 @@ async function bootstrapMain(): Promise<void> {
 
   await connect();
   registerAuthHandlers();
-  // Future handler groups (products, pos, purchases, …) plug in here.
+  registerCategoriesHandlers();
+  registerProductsHandlers();
+  // Future handler groups (pos, purchases, …) plug in here.
   bindIpcHandlers(ipcMain);
 }
 
