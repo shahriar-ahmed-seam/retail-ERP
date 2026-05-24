@@ -25,3 +25,4 @@ export { registerCategoriesHandlers } from './categories.js';
 export { registerInventoryHandlers } from './inventory.js';
 export { registerProductsHandlers } from './products.js';
 export { registerReportsHandlers } from './reports.js';
+export { registerSuppliersHandlers } from './suppliers.js';

@@ -352,13 +352,13 @@ Stack:
 
 ### Phase 6 — Purchase system
 
-- [~] 6.1 SupplierService and pages
+- [x] 6.1 SupplierService and pages
   - Implement `supplier.service.ts` with `list(req)` calling `paginateCursor` on `Supplier` ordered by `(name ASC, id ASC)`, `upsert`, `detail(id)` returning paginated purchase history (cursor on `(createdAt DESC, id)`)
   - Wire `suppliers:list`, `suppliers:upsert`, `suppliers:detail` (Admin only for write; read allowed for Admin)
   - Pages: `SuppliersListPage` (virtualized via `<VirtualizedTable>` with cursor pagination), `SupplierFormPage`, `SupplierDetailPage`
   - _Requirements: 6.1, 6.2, 6.3, 16.1, 16.3, 16.5_
 
-- [~] 6.2 PurchaseService — atomic create
+- [-] 6.2 PurchaseService — atomic create
   - Implement `purchase.service.ts` `create(input, ctx)` that opens one `$transaction`:
     1. Insert `Purchase` header
     2. Insert `PurchaseItem` rows with `lineTotal = quantity * unitBuyPrice`
@@ -367,7 +367,7 @@ Stack:
   - Map FK violations to `Err('FK_VIOLATION')`
   - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 11.2_
 
-- [~] 6.3 Purchase create page
+- [-] 6.3 Purchase create page
   - `src/renderer/features/purchases/PurchaseCreatePage.tsx`: pick supplier, add product lines, enter quantity + unit buy price, submit
   - Read-only purchase list page showing recent purchases
   - _Requirements: 5.1, 5.2, 5.3_

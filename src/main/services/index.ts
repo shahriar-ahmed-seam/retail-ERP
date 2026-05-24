@@ -28,3 +28,5 @@ export {
 } from './inventory.service.js';
 
 export { ProductService } from './product.service.js';
+
+export { SupplierService } from './supplier.service.js';

@@ -11,6 +11,7 @@ import {
   registerInventoryHandlers,
   registerProductsHandlers,
   registerReportsHandlers,
+  registerSuppliersHandlers,
 } from '@main/ipc/handlers/index.js';
 import { bindIpcHandlers } from '@main/ipc/index.js';
 
@@ -57,6 +58,7 @@ async function bootstrapMain(): Promise<void> {
   registerProductsHandlers();
   registerInventoryHandlers();
   registerReportsHandlers();
+  registerSuppliersHandlers();
   // Future handler groups (pos, purchases, …) plug in here.
   bindIpcHandlers(ipcMain);
 }
