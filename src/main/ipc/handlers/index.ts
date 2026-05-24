@@ -24,5 +24,6 @@ export { registerAuthHandlers } from './auth.js';
 export { registerCategoriesHandlers } from './categories.js';
 export { registerInventoryHandlers } from './inventory.js';
 export { registerProductsHandlers } from './products.js';
+export { registerPurchasesHandlers } from './purchases.js';
 export { registerReportsHandlers } from './reports.js';
 export { registerSuppliersHandlers } from './suppliers.js';

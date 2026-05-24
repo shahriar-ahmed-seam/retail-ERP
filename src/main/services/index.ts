@@ -29,4 +29,6 @@ export {
 
 export { ProductService } from './product.service.js';
 
+export { PurchaseService } from './purchase.service.js';
+
 export { SupplierService } from './supplier.service.js';
