@@ -383,22 +383,22 @@ Stack:
 
 ### Phase 7 — POS system (single-screen)
 
-- [ ] 7.1 Totals math module (pure)
+- [x] 7.1 Totals math module (pure)
   - Implement `src/main/services/pos/totals.ts` and a renderer-side mirror in `src/renderer/features/pos/totals.ts` (or a shared helper in `src/shared/`)
   - Functions: `computeSubtotal(items)`, `applyDiscount(subtotal, discount)`, `computeTaxTotal(items, discountRatio)`, `computeGrandTotal(...)`, `validateTotalsIdentity(input)`
   - Handles fixed-amount and percentage discount; tax computed on post-discount subtotal with proportional per-line allocation per design
   - _Requirements: 4.4, 4.5, 4.6, 2.6_
 
-- [ ] 7.2 POSService — `scan(barcode)`
+- [x] 7.2 POSService — `scan(barcode)`
   - Implement in `pos.service.ts`: `findUnique` on `Product.barcode`; return `ProductDTO | null` (no DB writes)
   - Wire `pos:scan` (Admin + Cashier)
   - _Requirements: 4.1, 12.1_
 
-- [ ] 7.3 POSService — serial number allocator
+- [x] 7.3 POSService — serial number allocator
   - Implement `nextSerial(tx)` that reads `Setting 'sale.serialCounter'`, increments, writes back inside the same tx, and formats `INV-XXXXXX`
   - _Requirements: 4.3_
 
-- [ ] 7.4 POSService — `finalizeSale(input, ctx)`
+- [x] 7.4 POSService — `finalizeSale(input, ctx)`
   - One `$transaction`:
     1. `validateTotalsIdentity(input)` (`Err('VALIDATION')` on mismatch, including payments sum vs grand total)
     2. For each line, read `Inventory.onHand`; throw `OutOfStockError` if any line would underflow

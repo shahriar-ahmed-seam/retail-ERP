@@ -31,6 +31,19 @@ export {
   type CursorPayload,
 } from './cursor.js';
 
+// POS totals math (task 7.1) — shared by renderer (live cart totals) and
+// main process (`pos:finalize` re-validation inside the transaction).
+export {
+  applyDiscount,
+  computeGrandTotal,
+  computeSubtotal,
+  computeTaxTotal,
+  validateTotalsIdentity,
+  type TotalsItem,
+  type TotalsValidation,
+  type ValidateTotalsOptions,
+} from './pos-totals.js';
+
 // IPC contract — single source of truth for every channel between
 // renderer and main. Re-exports the pagination envelopes alongside the
 // `IpcContract` type itself (task 2.2).

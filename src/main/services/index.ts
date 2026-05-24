@@ -5,9 +5,9 @@
 //   - category.service.ts (Phase 4, task 4.1)
 //   - product.service.ts (Phase 4, task 4.2)
 //   - inventory.service.ts (Phase 5, task 5.1)
+//   - pos.service.ts (Phase 7, tasks 7.2 + 7.3)
 //
-// Future additions: pos, purchase, supplier, customer,
-// permission, report, backup, audit.
+// Future additions: customer, permission, report, backup, audit.
 
 export {
   AuthService,
@@ -26,6 +26,8 @@ export {
   type MovementType,
   type ReferenceType,
 } from './inventory.service.js';
+
+export { POSService } from './pos.service.js';
 
 export { ProductService } from './product.service.js';
 

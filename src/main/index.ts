@@ -9,6 +9,7 @@ import {
   registerAuthHandlers,
   registerCategoriesHandlers,
   registerInventoryHandlers,
+  registerPosHandlers,
   registerProductsHandlers,
   registerPurchasesHandlers,
   registerReportsHandlers,
@@ -61,7 +62,8 @@ async function bootstrapMain(): Promise<void> {
   registerReportsHandlers();
   registerSuppliersHandlers();
   registerPurchasesHandlers();
-  // Future handler groups (pos, …) plug in here.
+  registerPosHandlers();
+  // Future handler groups (pos:finalize in task 7.4, …) plug in here.
   bindIpcHandlers(ipcMain);
 }
 

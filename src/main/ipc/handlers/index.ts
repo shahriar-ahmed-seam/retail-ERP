@@ -17,12 +17,14 @@
 //                                          (Phase 10 extends this with
 //                                           dailySales / monthlySales /
 //                                           topSelling / export)
-//   - pos.ts        (Phase 7)            — pos:scan, pos:finalize
+//   - pos.ts        (Phase 7, task 7.2)  — pos:scan
+//                                          (task 7.4 will add pos:finalize)
 //   - …
 
 export { registerAuthHandlers } from './auth.js';
 export { registerCategoriesHandlers } from './categories.js';
 export { registerInventoryHandlers } from './inventory.js';
+export { registerPosHandlers } from './pos.js';
 export { registerProductsHandlers } from './products.js';
 export { registerPurchasesHandlers } from './purchases.js';
 export { registerReportsHandlers } from './reports.js';
