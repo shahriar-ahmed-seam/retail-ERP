@@ -1,0 +1,68 @@
+{
+  "name": "core-retail-erp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Single-tenant Electron + React + TypeScript + SQLite + Prisma desktop ERP for retail.",
+  "main": "dist/main/index.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "test": "npm run test:unit && npm run test:integration && npm run test:property && npm run test:e2e",
+    "test:unit": "vitest --run --project unit",
+    "test:integration": "vitest --run --project integration",
+    "test:property": "vitest --run --project property",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.renderer.json --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "prisma": "prisma",
+    "prisma:generate": "prisma generate",
+    "prisma:format": "prisma format",
+    "prisma:seed": "prisma db seed",
+    "db:template": "tsx scripts/build-db-template.ts",
+    "dist": "electron-builder"
+  },
+  "prisma": {
+    "seed": "tsx prisma/seed.ts"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.4",
+    "@playwright/test": "^1.60.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/bcrypt": "^6.0.0",
+    "@types/node": "^20.11.0",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^42.2.0",
+    "electron-vite": "^5.0.0",
+    "eslint": "^9.39.4",
+    "eslint-config-prettier": "^9.1.2",
+    "eslint-import-resolver-typescript": "^3.10.1",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "fast-check": "^4.8.0",
+    "globals": "^15.15.0",
+    "jsdom": "^26.1.0",
+    "prettier": "^3.8.3",
+    "prettier-plugin-organize-imports": "^4.3.0",
+    "prisma": "^6.19.3",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "tsx": "^4.22.3",
+    "typescript": "^5.4.0",
+    "typescript-eslint": "^8.59.4",
+    "vite": "^7.3.3",
+    "vitest": "^4.1.7"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcrypt": "^5.1.1"
+  }
+}

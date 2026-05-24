@@ -1,0 +1,21 @@
+{
+  "//": "Tsconfig used solely by ESLint's typescript-eslint parser. Covers root-level config files (electron.vite.config.ts, eslint.config.mjs) that are not part of the per-process build configs. The per-process configs (tsconfig.main.json / preload / renderer) handle src/** and tests are picked up via the renderer/main configs as needed.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "types": ["node"],
+    "allowJs": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "electron.vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "prisma/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx"
+  ]
+}

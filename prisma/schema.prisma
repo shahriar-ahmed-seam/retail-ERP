@@ -1,0 +1,219 @@
+// prisma/schema.prisma
+//
+// Core Retail ERP V1 — single-tenant SQLite schema.
+//
+// Mirrors the "Data Models / Prisma schema" section of
+// .kiro/specs/core-retail-erp/design.md exactly:
+//   - 16 models (Role, User, Category, Product, Inventory,
+//     InventoryMovement, Customer, Supplier, Purchase, PurchaseItem,
+//     Sale, SaleItem, Payment, Setting, AuditLog, JournalEntry)
+//   - All @unique, @@index, and @relation declarations
+//   - Composite cursor indexes ([... DESC, id]) on Sale, InventoryMovement,
+//     AuditLog, JournalEntry to back paginated list channels
+//     (Req 15.4, 16.4)
+//
+// SQLite-specific PRAGMAs (WAL, foreign_keys=ON, etc.) are applied per
+// connection by src/main/db/prisma.ts at runtime (Phase 1, task 1.3).
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Role {
+  id    String @id @default(cuid())
+  name  String @unique // 'Admin' | 'Cashier'
+  users User[]
+}
+
+model User {
+  id           String              @id @default(cuid())
+  username     String              @unique
+  passwordHash String
+  roleId       String
+  role         Role                @relation(fields: [roleId], references: [id])
+  createdAt    DateTime            @default(now())
+  saleEvents   Sale[]              @relation("CashierSales")
+  movements    InventoryMovement[]
+}
+
+model Category {
+  id       String    @id @default(cuid())
+  name     String    @unique
+  products Product[]
+}
+
+model Product {
+  id             String              @id @default(cuid())
+  sku            String              @unique
+  name           String
+  categoryId     String
+  category       Category            @relation(fields: [categoryId], references: [id])
+  barcode        String?             @unique
+  buyPrice       Decimal
+  sellPrice      Decimal
+  taxRate        Decimal             @default(0) // e.g. 0.18
+  warrantyMonths Int                 @default(0)
+  reorderLevel   Int                 @default(0)
+  inventory      Inventory?
+  saleItems      SaleItem[]
+  purchaseItems  PurchaseItem[]
+  movements      InventoryMovement[]
+
+  @@index([barcode])
+  @@index([sku])
+}
+
+model Inventory {
+  productId String   @id
+  product   Product  @relation(fields: [productId], references: [id])
+  onHand    Int      @default(0) // denormalized cache; invariant: == sum(movements.qtyDelta)
+  updatedAt DateTime @updatedAt
+}
+
+model InventoryMovement {
+  id            String   @id @default(cuid())
+  productId     String
+  product       Product  @relation(fields: [productId], references: [id])
+  quantityDelta Int // +N for receipt/return, -N for sale
+  movementType  String // 'sale' | 'purchase' | 'adjustment' | 'return'
+  referenceType String // 'sale' | 'purchase' | 'adjustment'
+  referenceId   String
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  timestamp     DateTime @default(now())
+
+  @@index([productId])
+  @@index([referenceType, referenceId])
+  @@index([timestamp])
+  @@index([timestamp(sort: Desc), id]) // cursor index for paginated movement list (Req 15.4, 16.4)
+}
+
+model Customer {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  sales     Sale[]
+  createdAt DateTime @default(now())
+
+  @@index([phone])
+}
+
+model Supplier {
+  id        String     @id @default(cuid())
+  name      String
+  phone     String?
+  address   String?
+  purchases Purchase[]
+
+  @@index([name])
+}
+
+model Purchase {
+  id         String         @id @default(cuid())
+  supplierId String
+  supplier   Supplier       @relation(fields: [supplierId], references: [id])
+  invoiceNo  String?
+  total      Decimal
+  createdAt  DateTime       @default(now())
+  items      PurchaseItem[]
+
+  @@index([supplierId, createdAt])
+}
+
+model PurchaseItem {
+  id           String   @id @default(cuid())
+  purchaseId   String
+  purchase     Purchase @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  productId    String
+  product      Product  @relation(fields: [productId], references: [id])
+  quantity     Int
+  unitBuyPrice Decimal
+  lineTotal    Decimal // == quantity * unitBuyPrice (Property: line_total identity)
+
+  @@index([purchaseId])
+}
+
+model Sale {
+  id         String     @id @default(cuid())
+  serialNo   String     @unique // 'INV-000123'
+  customerId String?
+  customer   Customer?  @relation(fields: [customerId], references: [id])
+  cashierId  String
+  cashier    User       @relation("CashierSales", fields: [cashierId], references: [id])
+  subtotal   Decimal
+  discount   Decimal    @default(0)
+  taxTotal   Decimal    @default(0)
+  grandTotal Decimal
+  createdAt  DateTime   @default(now())
+  items      SaleItem[]
+  payments   Payment[]
+
+  @@index([serialNo])
+  @@index([createdAt])
+  @@index([customerId])
+  @@index([createdAt(sort: Desc), id]) // cursor index for paginated sales list (Req 15.4, 16.4)
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  sale      Sale    @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  quantity  Int
+  unitPrice Decimal // sellPrice at sale time
+  taxRate   Decimal // taxRate at sale time
+  lineTotal Decimal // quantity * unitPrice (pre-discount, pre-tax)
+
+  @@index([saleId])
+}
+
+model Payment {
+  id     String  @id @default(cuid())
+  saleId String
+  sale   Sale    @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  method String // 'cash' | 'card' | 'mobile'
+  amount Decimal
+
+  @@index([saleId])
+}
+
+model Setting {
+  key   String @id
+  value String // JSON string
+  // Notable keys:
+  //   'sale.serialCounter'   -> integer string, monotonic counter for INV-XXXXXX
+  //   'printer.escpos'       -> { kind: 'usb'|'serial'|'network', target: string }
+  //   'backup.retentionDays' -> '14'
+  //   'backup.lastSnapshot'  -> ISO timestamp
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actionType String // 'price.change' | 'role.change' | 'stock.adjust' | 'rbac.deny' ...
+  entityType String
+  entityId   String
+  previous   String? // JSON
+  next       String? // JSON
+  userId     String?
+  timestamp  DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([actionType])
+  @@index([timestamp(sort: Desc), id]) // cursor index for paginated audit list (Req 15.4, 16.4)
+}
+
+model JournalEntry {
+  id        String   @id @default(cuid())
+  opType    String // 'sale' | 'purchase' | 'adjustment' | 'price.change' | 'role.change'
+  payload   String // JSON snapshot of the committed business event
+  timestamp DateTime @default(now())
+
+  @@index([timestamp])
+  @@index([timestamp(sort: Desc), id]) // cursor index for replay window + paginated debug list (Req 15.4, 16.4)
+}
