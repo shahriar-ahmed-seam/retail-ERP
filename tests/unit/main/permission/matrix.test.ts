@@ -186,6 +186,9 @@ const CASHIER_DENY: readonly IpcChannel[] = [
   'users:assignRole',
   // Settings writes (Req 8.3).
   'settings:set',
+  // Printer test (Phase 8 task 8.6 — Admin only, surfaces from the
+  // printer settings page).
+  'printer:test',
   // Initial-admin setup is gated by hasAnyAdmin — not a cashier surface.
   'setup:createInitialAdmin',
   // First-run probe is public (requiresAuth: false). Like the setup

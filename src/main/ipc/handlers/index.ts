@@ -28,4 +28,5 @@ export { registerPosHandlers } from './pos.js';
 export { registerProductsHandlers } from './products.js';
 export { registerPurchasesHandlers } from './purchases.js';
 export { registerReportsHandlers } from './reports.js';
+export { registerSettingsHandlers } from './settings.js';
 export { registerSuppliersHandlers } from './suppliers.js';

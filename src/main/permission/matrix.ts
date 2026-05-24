@@ -182,6 +182,12 @@ export const RBAC: Readonly<Record<keyof IpcContract, readonly SessionRole[]>> =
   // Admin-only (Req 8.2, 8.3).
   'settings:get': ALL_ROLES,
   'settings:set': ADMIN_ONLY,
+
+  // ----- Printer ----------------------------------------------------------
+  // Test-print is reachable from the printer settings page (task 8.6) and
+  // the page itself is Admin-only. RBAC denial for the Cashier role writes
+  // an `rbac.deny` audit row before the handler runs (Req 8.4).
+  'printer:test': ADMIN_ONLY,
 });
 
 // ---------------------------------------------------------------------------

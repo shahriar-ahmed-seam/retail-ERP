@@ -453,6 +453,32 @@ export interface IpcContract {
     req: { key: string; value: SettingValue };
     res: void;
   };
+
+  // ----- Printer (Admin only) ---------------------------------------------
+  /**
+   * Test-print a synthetic receipt through the live printer chain
+   * (`selectPrinter().print(receipt)` — ESC/POS → HTML → PDF). The
+   * Settings UI for printer configuration (Phase 8, task 8.6) calls
+   * this after the operator picks a `kind` / `target` so they can
+   * confirm the configured device actually emits paper before
+   * finalizing a real sale. Admin-only — RBAC denies the Cashier
+   * role and writes an `rbac.deny` audit row.
+   *
+   * The synthetic receipt carries the configured shop-info block (so
+   * the operator can verify the header), the current timestamp, a
+   * single placeholder line ("TEST PRINT"), zero totals, and no
+   * payments. Nothing is persisted — `runChain` is invoked directly,
+   * NOT `postCommitPrint`, so the test print is observable as
+   * `Ok({ adapter })` carrying the link in the chain that handled
+   * it (`'escpos' | 'html' | 'pdf'`). On chain-wide failure the
+   * envelope is the LAST adapter's `Err('PRINTER_FAILURE', ...)`.
+   *
+   * Validates: Requirements 4.7, 8.2.
+   */
+  'printer:test': {
+    req: void;
+    res: { adapter: 'escpos' | 'html' | 'pdf'; output?: string };
+  };
 }
 
 /** Convenience alias for any channel name. */
@@ -558,6 +584,9 @@ export const IPC_CHANNELS = [
   // Settings
   'settings:get',
   'settings:set',
+
+  // Printer
+  'printer:test',
 ] as const satisfies readonly IpcChannel[];
 
 /** Channel names declared in `IPC_CHANNELS`, derived back from the literal tuple. */

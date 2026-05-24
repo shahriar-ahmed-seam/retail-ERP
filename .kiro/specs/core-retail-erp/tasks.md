@@ -467,17 +467,17 @@ Stack:
   - Wire from POSService after `finalizeSale` commit; printer failures never roll back the sale
   - _Requirements: 4.7, 4.8, 4.9_
 
-- [ ] 8.6 Settings UI for printer configuration
+- [x] 8.6 Settings UI for printer configuration
   - `src/renderer/features/settings/PrinterSettingsPage.tsx`: pick `kind`, enter `target`, test print button (Admin only)
   - Persists via `settings:set` to `printer.escpos`
   - _Requirements: 4.7, 8.2_
 
-- [ ] 8.7\* Integration test — printer chain fallback
+- [x] 8.7\* Integration test — printer chain fallback
   - Mock ESC/POS adapter to throw; assert HTML adapter is invoked and the chain resolves successfully
   - Mock both ESC/POS and HTML to throw; assert PDF file is written under `receipts/`
   - _Requirements: 4.7, 4.8_
 
-- [ ] 8.8 Checkpoint — printing green
+- [x] 8.8 Checkpoint — printing green
   - Receipts print via thermal in dev (or fallback to HTML/PDF); failure does not roll back sale
   - Ensure all tests pass, ask the user if questions arise.
 
