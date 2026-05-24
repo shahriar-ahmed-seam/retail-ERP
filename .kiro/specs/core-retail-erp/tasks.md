@@ -507,22 +507,22 @@ Stack:
 
 ### Phase 10 — Reports
 
-- [ ] 10.1 ReportService — daily sales
+- [x] 10.1 ReportService — daily sales
   - Implement `report.service.ts` `dailySales({date})`: total sales count, total revenue, total tax, total discounts, per-payment-method breakdown
   - Wire `reports:dailySales` (Admin only)
   - _Requirements: 9.1_
 
-- [ ] 10.2 ReportService — monthly sales
+- [x] 10.2 ReportService — monthly sales
   - `monthlySales({year, month})`: total sales count, total revenue, total tax, total discounts
   - Wire `reports:monthlySales`
   - _Requirements: 9.2_
 
-- [ ] 10.3 ReportService — low-stock summary
+- [x] 10.3 ReportService — low-stock summary
   - `lowStockSummary()`: `sku`, `name`, `onHand`, `reorderLevel` for every product where `onHand <= reorderLevel`
   - Wire `reports:lowStock`
   - _Requirements: 9.3, 3.6_
 
-- [ ] 10.4 ReportService — top-selling
+- [x] 10.4 ReportService — top-selling
   - `topSelling({from, to})`: products ordered by total units sold desc within range
   - Wire `reports:topSelling`
   - _Requirements: 9.4_

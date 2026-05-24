@@ -39,11 +39,14 @@ import type {
   CustomerFilter,
   CustomerInput,
   CustomerSortKey,
+  DailySalesReport,
   FinalizeSaleInput,
   InventoryMovementDTO,
   JournalEntryDTO,
   JournalFilter,
   JournalSortKey,
+  LowStockRow,
+  MonthlySalesReport,
   MovementFilter,
   MovementSortKey,
   ProductDTO,
@@ -54,6 +57,7 @@ import type {
   PurchaseSummaryDTO,
   PurchasesFilter,
   PurchasesSortKey,
+  ReportExportRequest,
   SaleDTO,
   SaleSummaryDTO,
   SalesFilter,
@@ -62,6 +66,7 @@ import type {
   SupplierFilter,
   SupplierInput,
   SupplierSortKey,
+  TopSellingRow,
 } from './dto/index.js';
 import type { Result } from './result.js';
 
@@ -147,58 +152,18 @@ export interface UserUpsertInput {
   readonly roleId: string;
 }
 
-/** Daily sales report result (Req 9.1). */
-export interface DailySalesReport {
-  readonly date: string;
-  readonly salesCount: number;
-  readonly totalRevenue: string;
-  readonly totalTax: string;
-  readonly totalDiscount: string;
-  readonly paymentBreakdown: readonly {
-    readonly method: 'cash' | 'card' | 'mobile';
-    readonly amount: string;
-  }[];
-}
-
-/** Monthly sales report result (Req 9.2). */
-export interface MonthlySalesReport {
-  /** Month identifier in `YYYY-MM` form. */
-  readonly month: string;
-  readonly salesCount: number;
-  readonly totalRevenue: string;
-  readonly totalTax: string;
-  readonly totalDiscount: string;
-}
-
-/** Single row of the low-stock report (Req 9.3). */
-export interface LowStockRow {
-  readonly productId: string;
-  readonly sku: string;
-  readonly name: string;
-  readonly onHand: number;
-  readonly reorderLevel: number;
-}
-
-/** Single row of the top-selling report (Req 9.4). */
-export interface TopSellingRow {
-  readonly productId: string;
-  readonly sku: string;
-  readonly name: string;
-  readonly unitsSold: number;
-  readonly revenue: string;
-}
-
-/**
- * Request payload for `reports:export`. The `reportId` chooses which
- * report to render; `filter` and `sort` are forwarded into the underlying
- * cursor-paginated `SELECT` (design.md > "Streaming exports").
- */
-export interface ReportExportRequest {
-  readonly reportId: 'dailySales' | 'monthlySales' | 'lowStock' | 'topSelling';
-  readonly format: 'csv' | 'pdf';
-  readonly filter?: Readonly<Record<string, unknown>>;
-  readonly sort?: { readonly key: string; readonly dir: 'asc' | 'desc' };
-}
+// Reports DTOs (Req 9.1–9.5) live in `dto/report.ts` as of Phase 10
+// task 10.1; they are re-exported below so existing renderer/main
+// code that imports them from `@shared/ipc-contract` keeps compiling
+// without an import-path change.
+export type {
+  DailySalesPaymentBreakdownRow,
+  DailySalesReport,
+  LowStockRow,
+  MonthlySalesReport,
+  ReportExportRequest,
+  TopSellingRow,
+} from './dto/report.js';
 
 /** A persisted setting value (always JSON-decoded by main before send). */
 export type SettingValue = unknown;

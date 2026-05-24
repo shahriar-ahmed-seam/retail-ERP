@@ -1,34 +1,58 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Unit tests for the reports IPC handler group (Phase 5, task 5.3).
+ * Unit tests for the reports IPC handler group (Phase 5 task 5.3 +
+ * Phase 10 tasks 10.1–10.4).
  *
- * Drives `reports:lowStock` through `invokeHandlerForTest` — the same
- * code path Electron's `ipcMain.handle` uses in production — so the
- * assertions cover the full middleware chain (auth + RBAC + handler),
- * not just the handler body.
+ * Drives the four read-side report channels through
+ * `invokeHandlerForTest` — the same code path Electron's
+ * `ipcMain.handle` uses in production — so the assertions cover the
+ * full middleware chain (auth + RBAC + handler), not just the handler
+ * body.
  *
- * The matrix grants both Admin and Cashier on this channel because
- * the persistent `<LowStockBanner>` (design.md > "POS UI") is
- * visible on every screen for both roles and clicking it opens the
- * low-stock report. The tests assert:
- *   - admin sessions can call the channel and receive the rows,
- *   - cashier sessions can call it too (no FORBIDDEN, no rbac.deny
- *     audit row),
- *   - missing sessions return UNAUTHENTICATED before the service is
- *     touched.
+ * RBAC matrix surface:
+ *   - `reports:dailySales`   ADMIN_ONLY  (Req 9.1, 8.2)
+ *   - `reports:monthlySales` ADMIN_ONLY  (Req 9.2, 8.2)
+ *   - `reports:lowStock`     ALL_ROLES   (Req 3.6, 9.3)
+ *   - `reports:topSelling`   ADMIN_ONLY  (Req 9.4, 8.2)
  *
- * `@main/services/inventory.service` is mocked so the service
+ * The tests assert:
+ *   - admin sessions can call every channel,
+ *   - cashier sessions are denied on the three Admin-only channels
+ *     with `Err('FORBIDDEN')` AND an `rbac.deny` audit row written,
+ *   - cashier sessions can call `reports:lowStock` (the banner the
+ *     channel backs is visible to cashiers too),
+ *   - missing sessions return `Err('UNAUTHENTICATED')` before the
+ *     service is touched.
+ *
+ * Both `@main/services/report.service` and
+ * `@main/services/inventory.service` are mocked so the handler
  * surface is deterministic; the unit-level coverage of the actual
- * SQL projection lives in
+ * SQL projections lives in
+ * `tests/unit/main/services/report.service.test.ts` and
  * `tests/unit/main/services/inventory.service.test.ts`.
  *
- * Validates: Requirements 3.6, 8.3, 8.4, 9.3.
+ * Validates: Requirements 3.6, 8.3, 8.4, 9.1, 9.2, 9.3, 9.4.
  */
 
 // ---------------------------------------------------------------------------
-// InventoryService mock
+// Service mocks
 // ---------------------------------------------------------------------------
+
+const reportMock = vi.hoisted(() => ({
+  dailySales: vi.fn(),
+  monthlySales: vi.fn(),
+  lowStockSummary: vi.fn(),
+  topSelling: vi.fn(),
+}));
+
+vi.mock('@main/services/report.service', () => ({
+  ReportService: reportMock,
+}));
+
+vi.mock('@main/services/report.service.js', () => ({
+  ReportService: reportMock,
+}));
 
 const inventoryMock = vi.hoisted(() => ({
   applyMovement: vi.fn(),
@@ -62,10 +86,15 @@ import {
   resetAuditWriter,
   setAuditWriter,
 } from '@main/ipc/router';
-import { Ok } from '@shared/result';
+import { Err, Ok } from '@shared/result';
 
 import type { AuditWriteInput, AuditWriter } from '@main/ipc/router';
-import type { LowStockRow } from '@shared/ipc-contract';
+import type {
+  DailySalesReport,
+  LowStockRow,
+  MonthlySalesReport,
+  TopSellingRow,
+} from '@shared/ipc-contract';
 
 // ---------------------------------------------------------------------------
 // Recording audit writer
@@ -101,7 +130,7 @@ function bindCashier(): void {
   });
 }
 
-const sampleRows: readonly LowStockRow[] = Object.freeze([
+const sampleLowStockRows: readonly LowStockRow[] = Object.freeze([
   Object.freeze({
     productId: 'p-1',
     sku: 'SKU-1',
@@ -118,6 +147,36 @@ const sampleRows: readonly LowStockRow[] = Object.freeze([
   }),
 ]);
 
+const sampleDailySales: DailySalesReport = Object.freeze({
+  date: '2024-05-15',
+  salesCount: 3,
+  totalRevenue: '300',
+  totalTax: '54',
+  totalDiscount: '15',
+  paymentBreakdown: Object.freeze([
+    Object.freeze({ method: 'cash' as const, amount: '100' }),
+    Object.freeze({ method: 'card' as const, amount: '200' }),
+  ]),
+});
+
+const sampleMonthlySales: MonthlySalesReport = Object.freeze({
+  month: '2024-05',
+  salesCount: 42,
+  totalRevenue: '4200',
+  totalTax: '756',
+  totalDiscount: '210',
+});
+
+const sampleTopRows: readonly TopSellingRow[] = Object.freeze([
+  Object.freeze({
+    productId: 'p-1',
+    sku: 'A',
+    name: 'Alpha',
+    unitsSold: 50,
+    revenue: '500',
+  }),
+]);
+
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {
     /* silence the router's defensive logs */
@@ -128,6 +187,10 @@ beforeEach(() => {
   recorder = new RecordingAuditWriter();
   setAuditWriter(recorder);
 
+  reportMock.dailySales.mockReset();
+  reportMock.monthlySales.mockReset();
+  reportMock.lowStockSummary.mockReset();
+  reportMock.topSelling.mockReset();
   inventoryMock.applyMovement.mockReset();
   inventoryMock.adjust.mockReset();
   inventoryMock.lowStockCount.mockReset();
@@ -148,15 +211,18 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('registerReportsHandlers', () => {
-  it('registers the reports:lowStock channel', () => {
+  it('registers all four report channels', () => {
+    expect(hasHandler('reports:dailySales')).toBe(true);
+    expect(hasHandler('reports:monthlySales')).toBe(true);
     expect(hasHandler('reports:lowStock')).toBe(true);
+    expect(hasHandler('reports:topSelling')).toBe(true);
   });
 
   it('is idempotent — re-running replaces, does not error', () => {
     expect(() => {
       registerReportsHandlers();
     }).not.toThrow();
-    expect(hasHandler('reports:lowStock')).toBe(true);
+    expect(hasHandler('reports:dailySales')).toBe(true);
   });
 });
 
@@ -164,72 +230,179 @@ describe('registerReportsHandlers', () => {
 // Auth gate (default `requiresAuth: true`)
 // ---------------------------------------------------------------------------
 
-describe('reports:lowStock requires an authenticated session', () => {
-  it('returns UNAUTHENTICATED with no session bound', async () => {
-    const result = await invokeHandlerForTest('reports:lowStock', ADMIN_SENDER, undefined);
+describe('reports:* require an authenticated session', () => {
+  it.each([
+    ['reports:dailySales' as const, { date: '2024-05-15' }],
+    ['reports:monthlySales' as const, { month: '2024-05' }],
+    ['reports:lowStock' as const, undefined],
+    ['reports:topSelling' as const, { dateFrom: '2024-05-01', dateTo: '2024-05-31' }],
+  ])('%s returns UNAUTHENTICATED with no session bound', async (channel, payload) => {
+    const result = await invokeHandlerForTest(channel, ADMIN_SENDER, payload as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('UNAUTHENTICATED');
+    expect(reportMock.dailySales).not.toHaveBeenCalled();
+    expect(reportMock.monthlySales).not.toHaveBeenCalled();
+    expect(reportMock.lowStockSummary).not.toHaveBeenCalled();
+    expect(reportMock.topSelling).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reports:dailySales
+// ---------------------------------------------------------------------------
+
+describe('reports:dailySales handler', () => {
+  it('Admin can call it and receives the report envelope', async () => {
+    reportMock.dailySales.mockResolvedValue(Ok(sampleDailySales));
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:dailySales', ADMIN_SENDER, {
+      date: '2024-05-15',
+    });
+    expect(reportMock.dailySales).toHaveBeenCalledWith({ date: '2024-05-15' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toEqual(sampleDailySales);
+  });
+
+  it('forwards VALIDATION envelopes from the service unchanged', async () => {
+    reportMock.dailySales.mockResolvedValue(Err('VALIDATION', { field: 'date' }));
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:dailySales', ADMIN_SENDER, {
+      date: 'bad',
+    });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe('UNAUTHENTICATED');
+      expect(result.error.code).toBe('VALIDATION');
+      expect(result.error.details).toEqual({ field: 'date' });
     }
-    expect(inventoryMock.lowStockList).not.toHaveBeenCalled();
+  });
+
+  it('Cashier is denied with FORBIDDEN and an rbac.deny audit row is written', async () => {
+    reportMock.dailySales.mockResolvedValue(Ok(sampleDailySales));
+    bindCashier();
+
+    const result = await invokeHandlerForTest('reports:dailySales', CASHIER_SENDER, {
+      date: '2024-05-15',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+    expect(reportMock.dailySales).not.toHaveBeenCalled();
+
+    const denyRow = recorder.rows.find(
+      (r) => r.actionType === 'rbac.deny' && r.entityId === 'reports:dailySales',
+    );
+    expect(denyRow).toBeDefined();
+    expect(denyRow?.userId).toBe('u-cashier');
   });
 });
 
 // ---------------------------------------------------------------------------
-// Admin path (Req 3.6, 9.3)
+// reports:monthlySales
 // ---------------------------------------------------------------------------
 
-describe('reports:lowStock handler — Admin path', () => {
+describe('reports:monthlySales handler', () => {
+  it('Admin can call it and receives the report envelope', async () => {
+    reportMock.monthlySales.mockResolvedValue(Ok(sampleMonthlySales));
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:monthlySales', ADMIN_SENDER, {
+      month: '2024-05',
+    });
+    expect(reportMock.monthlySales).toHaveBeenCalledWith({ month: '2024-05' });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value).toEqual(sampleMonthlySales);
+  });
+
+  it('Cashier is denied with FORBIDDEN', async () => {
+    reportMock.monthlySales.mockResolvedValue(Ok(sampleMonthlySales));
+    bindCashier();
+
+    const result = await invokeHandlerForTest('reports:monthlySales', CASHIER_SENDER, {
+      month: '2024-05',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+    expect(reportMock.monthlySales).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reports:lowStock — Admin + Cashier (banner-backing channel)
+// ---------------------------------------------------------------------------
+
+describe('reports:lowStock handler', () => {
   it('Admin can call it and receives the { rows } envelope', async () => {
-    inventoryMock.lowStockList.mockResolvedValue(Ok({ rows: sampleRows }));
+    reportMock.lowStockSummary.mockResolvedValue(Ok({ rows: sampleLowStockRows }));
     bindAdmin();
 
     const result = await invokeHandlerForTest('reports:lowStock', ADMIN_SENDER, undefined);
-
-    expect(inventoryMock.lowStockList).toHaveBeenCalledTimes(1);
+    expect(reportMock.lowStockSummary).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.rows).toEqual(sampleRows);
-    }
+    if (result.ok) expect(result.value.rows).toEqual(sampleLowStockRows);
   });
 
-  it('forwards an empty row list unchanged', async () => {
-    inventoryMock.lowStockList.mockResolvedValue(Ok({ rows: [] }));
-    bindAdmin();
-
-    const result = await invokeHandlerForTest('reports:lowStock', ADMIN_SENDER, undefined);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.rows).toEqual([]);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Cashier path (Req 3.6, 8.3)
-// ---------------------------------------------------------------------------
-
-describe('reports:lowStock handler — Cashier path', () => {
-  it('Cashier is allowed by the matrix because the banner is visible to all roles', async () => {
-    inventoryMock.lowStockList.mockResolvedValue(Ok({ rows: sampleRows }));
+  it('Cashier can also call it because the banner is visible to all roles', async () => {
+    reportMock.lowStockSummary.mockResolvedValue(Ok({ rows: sampleLowStockRows }));
     bindCashier();
 
     const result = await invokeHandlerForTest('reports:lowStock', CASHIER_SENDER, undefined);
-
-    expect(inventoryMock.lowStockList).toHaveBeenCalledTimes(1);
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.rows).toEqual(sampleRows);
-    }
-  });
-
-  it('does not write an rbac.deny audit row when a Cashier calls it', async () => {
-    inventoryMock.lowStockList.mockResolvedValue(Ok({ rows: [] }));
-    bindCashier();
-
-    await invokeHandlerForTest('reports:lowStock', CASHIER_SENDER, undefined);
-
+    expect(reportMock.lowStockSummary).toHaveBeenCalledTimes(1);
     const denyRow = recorder.rows.find((r) => r.actionType === 'rbac.deny');
     expect(denyRow).toBeUndefined();
+  });
+
+  it('forwards an empty row list unchanged', async () => {
+    reportMock.lowStockSummary.mockResolvedValue(Ok({ rows: [] }));
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:lowStock', ADMIN_SENDER, undefined);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.rows).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reports:topSelling
+// ---------------------------------------------------------------------------
+
+describe('reports:topSelling handler', () => {
+  it('Admin can call it and receives the { rows } envelope', async () => {
+    reportMock.topSelling.mockResolvedValue(Ok({ rows: sampleTopRows }));
+    bindAdmin();
+
+    const req = { dateFrom: '2024-05-01', dateTo: '2024-05-31', limit: 10 };
+    const result = await invokeHandlerForTest('reports:topSelling', ADMIN_SENDER, req);
+    expect(reportMock.topSelling).toHaveBeenCalledWith(req);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.rows).toEqual(sampleTopRows);
+  });
+
+  it('forwards the limit field untouched', async () => {
+    reportMock.topSelling.mockResolvedValue(Ok({ rows: [] }));
+    bindAdmin();
+
+    await invokeHandlerForTest('reports:topSelling', ADMIN_SENDER, {
+      dateFrom: '2024-05-01',
+      dateTo: '2024-05-31',
+    });
+    expect(reportMock.topSelling).toHaveBeenCalledWith({
+      dateFrom: '2024-05-01',
+      dateTo: '2024-05-31',
+    });
+  });
+
+  it('Cashier is denied with FORBIDDEN', async () => {
+    reportMock.topSelling.mockResolvedValue(Ok({ rows: sampleTopRows }));
+    bindCashier();
+
+    const result = await invokeHandlerForTest('reports:topSelling', CASHIER_SENDER, {
+      dateFrom: '2024-05-01',
+      dateTo: '2024-05-31',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+    expect(reportMock.topSelling).not.toHaveBeenCalled();
   });
 });

@@ -64,6 +64,15 @@ export type {
 } from './receipt.js';
 
 export type {
+  DailySalesPaymentBreakdownRow,
+  DailySalesReport,
+  LowStockRow,
+  MonthlySalesReport,
+  ReportExportRequest,
+  TopSellingRow,
+} from './report.js';
+
+export type {
   DiscountInput,
   FinalizeSaleInput,
   PaymentDTO,

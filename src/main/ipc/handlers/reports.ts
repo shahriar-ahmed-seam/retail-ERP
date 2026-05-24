@@ -1,9 +1,8 @@
 // src/main/ipc/handlers/reports.ts
 //
-// IPC handlers for the reports channel group (Phase 5, task 5.3
-// scaffold; Phase 10 fills in the rest).
+// IPC handlers for the reports channel group.
 //
-// Wires `reports:lowStock` into the router on import via the
+// Wires four read-side report channels through the router via the
 // exported `registerReportsHandlers()` function. The bootstrap in
 // `src/main/index.ts` calls this alongside the other handler-group
 // registrations so the router is fully populated before
@@ -11,51 +10,81 @@
 //
 // Channels:
 //
-//   - `reports:lowStock` (Admin + Cashier — Req 3.6, 9.3)
-//       Forwards directly to `InventoryService.lowStockList()`.
-//       Returns the full `LowStockRow[]` projection (productId, sku,
-//       name, onHand, reorderLevel) sorted most-urgent first
-//       (highest reorderLevel, then lowest onHand, then name).
-//       Drives:
-//         - the renderer's `<LowStockBanner>` click-through, which
-//           opens the low-stock report page,
-//         - the daily summary export's "low-stock" section
-//           (Phase 10).
-//       The channel is read-only and has no parameters; the matrix
-//       (`src/main/permission/matrix.ts`) grants both Admin and
-//       Cashier access because the banner the channel backs is
-//       visible on every screen for both roles.
+//   - `reports:dailySales`   (Admin only — Req 9.1, 8.2)
+//       Forwards to `ReportService.dailySales({ date })`.
 //
-// Phase 10 will extend this module with `reports:dailySales`,
-// `reports:monthlySales`, `reports:topSelling`, and `reports:export`.
-// Splitting the reports handlers into their own module now —
-// rather than parking `reports:lowStock` inside `inventory.ts` —
-// keeps the per-module surface small and matches the convention
-// established by `auth.ts` / `categories.ts` / `products.ts` /
-// `inventory.ts`.
+//   - `reports:monthlySales` (Admin only — Req 9.2, 8.2)
+//       Forwards to `ReportService.monthlySales({ month })`.
 //
-// Validates: Requirements 3.6, 9.3, 8.4.
+//   - `reports:lowStock`     (Admin + Cashier — Req 3.6, 9.3)
+//       Forwards to `ReportService.lowStockSummary()` (which itself
+//       delegates to `InventoryService.lowStockList()` so the banner
+//       click-through and the report channel share one projection).
+//       The matrix grants both roles because the persistent
+//       `<LowStockBanner>` is visible on every screen for both Admin
+//       and Cashier.
+//
+//   - `reports:topSelling`   (Admin only — Req 9.4, 8.2)
+//       Forwards to `ReportService.topSelling({ dateFrom, dateTo, limit })`.
+//
+// The `reports:export` channel (Req 9.5) is intentionally NOT wired
+// here yet — that's Phase 10 tasks 10.5/10.6/10.7. This module's sole
+// job is the four read-side report channels.
+//
+// All four channels are read-only; no audit decorator is attached.
+// Audit-row volume from per-report-view writes would be out of
+// proportion to their signal value — the audit log focuses on
+// state-changing actions (price changes, stock adjustments, RBAC
+// denials) per design.md > "Audit log".
+//
+// Validates: Requirements 3.6, 8.4, 9.1, 9.2, 9.3, 9.4.
 
 import { registerHandler, type HandlerFn } from '@main/ipc/router.js';
-import { InventoryService } from '@main/services/inventory.service.js';
+import { ReportService } from '@main/services/report.service.js';
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
 /**
+ * `reports:dailySales` handler. Admin-only per the matrix. Thin
+ * pass-through to the service: validation of the `date` field
+ * (`YYYY-MM-DD` shape, real calendar day) lives in the service so
+ * malformed input surfaces as `Err('VALIDATION', { field: 'date' })`
+ * before any DB query runs.
+ */
+const dailySalesHandler: HandlerFn<'reports:dailySales'> = async (req) => {
+  return ReportService.dailySales(req);
+};
+
+/**
+ * `reports:monthlySales` handler. Admin-only per the matrix. Same
+ * thin-shell pattern as `dailySales`; the service validates the
+ * `month` field (`YYYY-MM`) and surfaces a `VALIDATION` envelope on
+ * malformed input.
+ */
+const monthlySalesHandler: HandlerFn<'reports:monthlySales'> = async (req) => {
+  return ReportService.monthlySales(req);
+};
+
+/**
  * `reports:lowStock` handler. Allowed for Admin and Cashier per the
  * matrix because the banner the channel backs is visible on every
- * screen for both roles (Req 3.6, 9.3). Thin pass-through to the
- * service: no per-call validation is needed because the request
- * shape is `void`. Read-only; no audit decorator attached because
- * banner expansions and report previews would generate audit-row
- * volume out of proportion to their signal value — the audit log
- * focuses on state-changing actions (price changes, stock
- * adjustments, RBAC denials) per design.md > "Audit log".
+ * screen for both roles (Req 3.6, 9.3). Read-only — no audit
+ * decorator attached.
  */
 const lowStockReportHandler: HandlerFn<'reports:lowStock'> = async () => {
-  return InventoryService.lowStockList();
+  return ReportService.lowStockSummary();
+};
+
+/**
+ * `reports:topSelling` handler. Admin-only per the matrix. Forwards
+ * the `{ dateFrom, dateTo, limit? }` request shape to the service,
+ * which validates the date strings and clamps `limit` to the
+ * service-level bound.
+ */
+const topSellingHandler: HandlerFn<'reports:topSelling'> = async (req) => {
+  return ReportService.topSelling(req);
 };
 
 // ---------------------------------------------------------------------------
@@ -71,10 +100,14 @@ const lowStockReportHandler: HandlerFn<'reports:lowStock'> = async () => {
  * twice (e.g. under HMR or in tests) is safe.
  */
 export function registerReportsHandlers(): void {
-  // Default `requiresAuth: true` — the auth middleware rejects
-  // anonymous renderers; the RBAC matrix grants both Admin and
-  // Cashier so neither role sees a `FORBIDDEN` envelope.
+  // Default `requiresAuth: true` — the auth + RBAC middleware
+  // enforces that only authenticated sessions reach these handlers.
+  // RBAC denial paths (Cashier hitting an Admin-only channel) write
+  // an `rbac.deny` audit row before this code runs.
+  registerHandler('reports:dailySales', {}, dailySalesHandler);
+  registerHandler('reports:monthlySales', {}, monthlySalesHandler);
   registerHandler('reports:lowStock', {}, lowStockReportHandler);
+  registerHandler('reports:topSelling', {}, topSellingHandler);
 }
 
 // Exported for unit tests in
@@ -83,5 +116,8 @@ export function registerReportsHandlers(): void {
 // router. Production code should always go through
 // `registerReportsHandlers`.
 export const __testables = Object.freeze({
+  dailySalesHandler,
+  monthlySalesHandler,
   lowStockReportHandler,
+  topSellingHandler,
 });

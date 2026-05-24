@@ -82,6 +82,7 @@ import { vi } from 'vitest';
 import type { CustomerService } from '@main/services/customer.service';
 import type { POSService } from '@main/services/pos.service';
 import type { PurchaseService } from '@main/services/purchase.service';
+import type { ReportService } from '@main/services/report.service';
 import type { PrismaClient } from '@prisma/client';
 
 // ---------------------------------------------------------------------------
@@ -116,6 +117,14 @@ export interface TempDbFixture {
    *  and this fixture is the only place that hands services bound to
    *  the per-test Prisma client. */
   readonly CustomerService: typeof CustomerService;
+  /** Re-imported `ReportService` instance bound to `prisma`.
+   *
+   *  Phase 10 tasks 10.1–10.4 expose this alongside `POSService` so
+   *  integration tests can finalize a few sales through the real POS
+   *  transaction and then assert that `dailySales` /
+   *  `monthlySales` / `lowStockSummary` / `topSelling` produce the
+   *  expected aggregations against the same per-test database. */
+  readonly ReportService: typeof ReportService;
   /** Disconnect the client and delete the underlying file + sidecars. */
   readonly cleanup: () => Promise<void>;
 }
@@ -328,6 +337,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
   const purchaseModule = await import('@main/services/purchase.service.js');
   const posModule = await import('@main/services/pos.service.js');
   const customerModule = await import('@main/services/customer.service.js');
+  const reportModule = await import('@main/services/report.service.js');
 
   // Step 7 — cleanup closure. Captures `prisma`, `dbPath`, and the
   // previous DATABASE_URL by reference so the test does not have to
@@ -369,6 +379,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
     PurchaseService: purchaseModule.PurchaseService,
     POSService: posModule.POSService,
     CustomerService: customerModule.CustomerService,
+    ReportService: reportModule.ReportService,
     cleanup,
   };
 }
