@@ -546,16 +546,16 @@ Stack:
   - Returns `{ path, rowCount }` (or `{ csvPath, pdfPath, rowCount }` when both formats are requested) only after both encoder `finish` events
   - _Requirements: 9.5, 16.6_
 
-- [ ] 10.8 Reports pages
+- [x] 10.8 Reports pages
   - `src/renderer/features/reports/`: pages for daily, monthly, low-stock, top-selling; date pickers; export button
   - Any preview table that can exceed 200 rows (top-selling for wide ranges, low-stock at large catalogs) renders through `<VirtualizedTable>` driven by cursor pagination on the relevant `*:list` channel
   - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 16.5_
 
-- [ ] 10.9 Low-stock banner component
+- [x] 10.9 Low-stock banner component
   - `src/renderer/components/LowStockBanner.tsx`: subscribes to `inventory:lowStockCount`, visible on every screen when count > 0; click navigates to low-stock report
   - _Requirements: 3.6, 9.3_
 
-- [ ] 10.10\* Property test — Property 10: report aggregates equal SQL aggregates
+- [x] 10.10\* Property test — Property 10: report aggregates equal SQL aggregates
   - **Property 10: Report aggregates equal SQL aggregates**
   - **Validates: Requirements 6.2, 6.3, 7.3, 9.1, 9.2, 9.3, 9.4**
   - Seed random sales/purchases/customers/suppliers; assert each report's values equal independently computed SQL aggregates over the same data set
@@ -565,7 +565,7 @@ Stack:
   - **Validates: Requirement 9.5**
   - For random row sets, assert CSV parses back to an equal row set; assert PDF contains every value from key columns as extractable text
 
-- [ ] 10.12 Checkpoint — reports green
+- [x] 10.12 Checkpoint — reports green
   - All four reports produce expected numbers; CSV+PDF export works
   - Ensure all tests pass, ask the user if questions arise.
 

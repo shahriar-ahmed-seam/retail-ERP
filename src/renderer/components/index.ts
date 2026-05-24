@@ -17,3 +17,6 @@ export {
   type UsePaginatedListResult,
   type VirtualizedTableProps,
 } from './VirtualizedTable';
+
+export { LowStockBanner } from './LowStockBanner';
+export type { LowStockBannerProps } from './LowStockBanner';

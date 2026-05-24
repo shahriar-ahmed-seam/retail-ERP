@@ -8,4 +8,5 @@
 // pages from `@renderer/features` directly.
 
 export * from './customers';
+export * from './reports';
 export * from './settings';
