@@ -58,6 +58,7 @@ import type {
   PurchasesFilter,
   PurchasesSortKey,
   ReportExportRequest,
+  ReportExportResponse,
   SaleDTO,
   SaleSummaryDTO,
   SalesFilter,
@@ -161,7 +162,10 @@ export type {
   DailySalesReport,
   LowStockRow,
   MonthlySalesReport,
+  ReportExportFormat,
+  ReportExportPaths,
   ReportExportRequest,
+  ReportExportResponse,
   TopSellingRow,
 } from './dto/report.js';
 
@@ -382,7 +386,7 @@ export interface IpcContract {
   };
   'reports:export': {
     req: ReportExportRequest;
-    res: { path: string; rowCount: number };
+    res: ReportExportResponse;
   };
 
   // ----- Backup -----------------------------------------------------------

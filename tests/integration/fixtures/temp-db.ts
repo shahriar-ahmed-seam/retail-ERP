@@ -125,6 +125,16 @@ export interface TempDbFixture {
    *  `monthlySales` / `lowStockSummary` / `topSelling` produce the
    *  expected aggregations against the same per-test database. */
   readonly ReportService: typeof ReportService;
+  /** Re-imported `exportReport` function bound to `prisma`.
+   *
+   *  Phase 10 task 10.7 — the streaming combined export entry
+   *  point. The fixture re-imports it (after `vi.resetModules()`)
+   *  so the encoder's underlying `pumpRows` walks the per-test
+   *  Prisma client rather than the process-wide singleton from
+   *  before the temp DB was opened. Tests trigger CSV + PDF
+   *  exports through this reference and assert the on-disk
+   *  artifacts. */
+  readonly exportReport: typeof import('@main/services/report/index').exportReport;
   /** Disconnect the client and delete the underlying file + sidecars. */
   readonly cleanup: () => Promise<void>;
 }
@@ -338,6 +348,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
   const posModule = await import('@main/services/pos.service.js');
   const customerModule = await import('@main/services/customer.service.js');
   const reportModule = await import('@main/services/report.service.js');
+  const reportExportModule = await import('@main/services/report/index.js');
 
   // Step 7 — cleanup closure. Captures `prisma`, `dbPath`, and the
   // previous DATABASE_URL by reference so the test does not have to
@@ -380,6 +391,7 @@ export async function createTempDb(): Promise<TempDbFixture> {
     POSService: posModule.POSService,
     CustomerService: customerModule.CustomerService,
     ReportService: reportModule.ReportService,
+    exportReport: reportExportModule.exportReport,
     cleanup,
   };
 }

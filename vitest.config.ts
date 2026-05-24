@@ -68,6 +68,13 @@ export default defineConfig({
           // default to avoid SQLite write contention. Individual suites can
           // opt into concurrency once they are isolated.
           fileParallelism: false,
+          // The temp-db fixture spawns `npx prisma migrate deploy` and
+          // `npx prisma db seed` synchronously per test, which on Windows
+          // can routinely exceed the default 10s vitest hook timeout. Bump
+          // both the hook and per-test timeouts to 60s so the fixture's
+          // Prisma CLI invocations have headroom under cold-cache runs.
+          hookTimeout: 60_000,
+          testTimeout: 60_000,
         },
       },
       {

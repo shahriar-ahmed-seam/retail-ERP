@@ -37,4 +37,21 @@ export { PurchaseService } from './purchase.service.js';
 
 export { ReportService } from './report.service.js';
 
+export {
+  describeReport,
+  exportCsv,
+  exportPdf,
+  exportReport,
+  pumpRows,
+  type BatchConsumer,
+  type CsvExportOptions,
+  type CsvExportResult,
+  type ExportColumn,
+  type ExportRow,
+  type PdfExportOptions,
+  type PdfExportResult,
+  type PumpOptions,
+  type SalesExportRow,
+} from './report/index.js';
+
 export { SupplierService } from './supplier.service.js';

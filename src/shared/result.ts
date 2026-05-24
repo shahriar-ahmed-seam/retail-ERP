@@ -38,6 +38,7 @@ export type ErrorCode =
   | 'FK_VIOLATION'
   | 'UNAUTHENTICATED'
   | 'FORBIDDEN'
+  | 'USER_CANCELED'
   | 'PRINTER_FAILURE'
   | 'DB_INTEGRITY'
   | 'INTERNAL';
@@ -95,6 +96,7 @@ const DEFAULT_MESSAGES: Readonly<Record<ErrorCode, string>> = {
   FK_VIOLATION: 'A referenced record could not be found.',
   UNAUTHENTICATED: 'You must be signed in to perform this action.',
   FORBIDDEN: 'You do not have permission to perform this action.',
+  USER_CANCELED: 'The operation was canceled.',
   PRINTER_FAILURE: 'The receipt printer is unavailable.',
   DB_INTEGRITY: 'The database failed an integrity check.',
   INTERNAL: 'An unexpected error occurred.',

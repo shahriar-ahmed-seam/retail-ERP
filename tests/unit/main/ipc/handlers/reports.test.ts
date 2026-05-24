@@ -54,6 +54,21 @@ vi.mock('@main/services/report.service.js', () => ({
   ReportService: reportMock,
 }));
 
+const exportMock = vi.hoisted(() => ({
+  exportReport: vi.fn(),
+}));
+
+vi.mock('@main/services/report/index', async (importActual) => {
+  const actual = await importActual<typeof import('@main/services/report/index')>();
+  return { ...actual, exportReport: exportMock.exportReport };
+});
+
+vi.mock('@main/services/report/index.js', async (importActual) => {
+  const actual =
+    await importActual<typeof import('@main/services/report/index.js')>();
+  return { ...actual, exportReport: exportMock.exportReport };
+});
+
 const inventoryMock = vi.hoisted(() => ({
   applyMovement: vi.fn(),
   adjust: vi.fn(),
@@ -78,7 +93,11 @@ vi.mock('@main/services/inventory.service.js', () => ({
 
 // Imports MUST come after `vi.mock`.
 import { sessionStore } from '@main/auth/session-store';
-import { registerReportsHandlers } from '@main/ipc/handlers/reports';
+import {
+  registerReportsHandlers,
+  resetSaveDialogOpener,
+  setSaveDialogOpener,
+} from '@main/ipc/handlers/reports';
 import {
   clearHandlers,
   hasHandler,
@@ -191,6 +210,7 @@ beforeEach(() => {
   reportMock.monthlySales.mockReset();
   reportMock.lowStockSummary.mockReset();
   reportMock.topSelling.mockReset();
+  exportMock.exportReport.mockReset();
   inventoryMock.applyMovement.mockReset();
   inventoryMock.adjust.mockReset();
   inventoryMock.lowStockCount.mockReset();
@@ -201,6 +221,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetAuditWriter();
+  resetSaveDialogOpener();
   clearHandlers();
   sessionStore.clearAll();
   vi.restoreAllMocks();
@@ -211,11 +232,12 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('registerReportsHandlers', () => {
-  it('registers all four report channels', () => {
+  it('registers all five report channels', () => {
     expect(hasHandler('reports:dailySales')).toBe(true);
     expect(hasHandler('reports:monthlySales')).toBe(true);
     expect(hasHandler('reports:lowStock')).toBe(true);
     expect(hasHandler('reports:topSelling')).toBe(true);
+    expect(hasHandler('reports:export')).toBe(true);
   });
 
   it('is idempotent — re-running replaces, does not error', () => {
@@ -236,6 +258,7 @@ describe('reports:* require an authenticated session', () => {
     ['reports:monthlySales' as const, { month: '2024-05' }],
     ['reports:lowStock' as const, undefined],
     ['reports:topSelling' as const, { dateFrom: '2024-05-01', dateTo: '2024-05-31' }],
+    ['reports:export' as const, { reportId: 'lowStock' as const, format: 'csv' as const }],
   ])('%s returns UNAUTHENTICATED with no session bound', async (channel, payload) => {
     const result = await invokeHandlerForTest(channel, ADMIN_SENDER, payload as never);
     expect(result.ok).toBe(false);
@@ -244,6 +267,7 @@ describe('reports:* require an authenticated session', () => {
     expect(reportMock.monthlySales).not.toHaveBeenCalled();
     expect(reportMock.lowStockSummary).not.toHaveBeenCalled();
     expect(reportMock.topSelling).not.toHaveBeenCalled();
+    expect(exportMock.exportReport).not.toHaveBeenCalled();
   });
 });
 
@@ -404,5 +428,137 @@ describe('reports:topSelling handler', () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
     expect(reportMock.topSelling).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reports:export — combined exporter
+// ---------------------------------------------------------------------------
+
+describe('reports:export handler', () => {
+  it('Admin can call it; bypasses dialog when paths are pre-supplied', async () => {
+    const dialog = vi.fn();
+    setSaveDialogOpener(dialog);
+    exportMock.exportReport.mockResolvedValue(
+      Ok({ path: '/tmp/x.csv', rowCount: 12 }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:export', ADMIN_SENDER, {
+      reportId: 'lowStock',
+      format: 'csv',
+      paths: { csv: '/tmp/x.csv' },
+    });
+
+    expect(dialog).not.toHaveBeenCalled();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({ path: '/tmp/x.csv', rowCount: 12 });
+    }
+    expect(exportMock.exportReport).toHaveBeenCalledTimes(1);
+  });
+
+  it('Cashier is denied with FORBIDDEN', async () => {
+    setSaveDialogOpener(vi.fn());
+    bindCashier();
+
+    const result = await invokeHandlerForTest('reports:export', CASHIER_SENDER, {
+      reportId: 'lowStock',
+      format: 'csv',
+      paths: { csv: '/tmp/x.csv' },
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe('FORBIDDEN');
+    expect(exportMock.exportReport).not.toHaveBeenCalled();
+  });
+
+  it('opens the save dialog when paths are missing and forwards the chosen path', async () => {
+    const dialog = vi.fn().mockResolvedValue('/picked/dailySales.csv');
+    setSaveDialogOpener(dialog);
+    exportMock.exportReport.mockResolvedValue(
+      Ok({ path: '/picked/dailySales.csv', rowCount: 5 }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:export', ADMIN_SENDER, {
+      reportId: 'dailySales',
+      format: 'csv',
+      filter: { date: '2024-05-15' },
+    });
+
+    expect(dialog).toHaveBeenCalledTimes(1);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.path).toBe('/picked/dailySales.csv');
+    }
+    expect(exportMock.exportReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paths: { csv: '/picked/dailySales.csv' },
+      }),
+    );
+  });
+
+  it('returns USER_CANCELED when the dialog is dismissed', async () => {
+    const dialog = vi.fn().mockResolvedValue(null);
+    setSaveDialogOpener(dialog);
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:export', ADMIN_SENDER, {
+      reportId: 'lowStock',
+      format: 'csv',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('USER_CANCELED');
+      expect(result.error.details).toMatchObject({ format: 'csv' });
+    }
+    expect(exportMock.exportReport).not.toHaveBeenCalled();
+  });
+
+  it('opens one dialog per requested format when both formats are requested', async () => {
+    const dialog = vi
+      .fn()
+      .mockResolvedValueOnce('/picked/x.csv')
+      .mockResolvedValueOnce('/picked/x.pdf');
+    setSaveDialogOpener(dialog);
+    exportMock.exportReport.mockResolvedValue(
+      Ok({ csvPath: '/picked/x.csv', pdfPath: '/picked/x.pdf', rowCount: 3 }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:export', ADMIN_SENDER, {
+      reportId: 'lowStock',
+      format: ['csv', 'pdf'],
+    });
+
+    expect(dialog).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value).toEqual({
+        csvPath: '/picked/x.csv',
+        pdfPath: '/picked/x.pdf',
+        rowCount: 3,
+      });
+    }
+    expect(exportMock.exportReport).toHaveBeenCalledWith(
+      expect.objectContaining({
+        paths: { csv: '/picked/x.csv', pdf: '/picked/x.pdf' },
+      }),
+    );
+  });
+
+  it('returns VALIDATION when format is missing or unrecognized', async () => {
+    setSaveDialogOpener(vi.fn());
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('reports:export', ADMIN_SENDER, {
+      reportId: 'lowStock',
+      format: [] as never,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION');
+      expect(result.error.details).toEqual({ field: 'format' });
+    }
   });
 });

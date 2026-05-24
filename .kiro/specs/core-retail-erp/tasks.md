@@ -527,20 +527,20 @@ Stack:
   - Wire `reports:topSelling`
   - _Requirements: 9.4_
 
-- [ ] 10.5 Streaming CSV export (`papaparse`)
+- [x] 10.5 Streaming CSV export (`papaparse`)
   - Implement `src/main/services/report/csv-export.ts` writing to a Node `WriteStream` opened from a user-chosen path via `dialog.showSaveDialog`
   - Drives the underlying SELECT via `paginateCursor` internally (same `(sort DESC, id)` cursor used by list channels) so at most `pageSize` rows are resident at any one time
   - Calls `papaparse.unparse(batch, { header: i === 0 })` per batch and writes the line block directly to the stream; emits the header on the first batch only
   - Resolves only after the stream's `finish` event; never buffers the full result set
   - _Requirements: 9.5, 16.3, 16.6_
 
-- [ ] 10.6 Streaming PDF export (`pdfkit`)
+- [x] 10.6 Streaming PDF export (`pdfkit`)
   - Implement `src/main/services/report/pdf-export.ts` using `pdfkit` in streaming mode: `doc.pipe(fs.createWriteStream(path))`
   - Pages flushed by the library as `addPage()` is called; the row pump uses the same cursor pagination as 10.5 so memory does not grow with row count
   - Header, summary table, and per-batch line items rendered incrementally; resolves only after the writable stream's `finish` event
   - _Requirements: 9.5, 16.3, 16.6_
 
-- [ ] 10.7 Combined export handler
+- [x] 10.7 Combined export handler
   - Wire `reports:export` to produce both CSV and PDF for a given report id and return both paths
   - Both encoders sit behind a single shared cursor-paginated SELECT so doubling the output formats does not double the memory footprint — the row buffer is shared and disposed per batch
   - Returns `{ path, rowCount }` (or `{ csvPath, pdfPath, rowCount }` when both formats are requested) only after both encoder `finish` events

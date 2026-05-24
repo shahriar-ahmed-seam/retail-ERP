@@ -68,7 +68,10 @@ export type {
   DailySalesReport,
   LowStockRow,
   MonthlySalesReport,
+  ReportExportFormat,
+  ReportExportPaths,
   ReportExportRequest,
+  ReportExportResponse,
   TopSellingRow,
 } from './report.js';
 
