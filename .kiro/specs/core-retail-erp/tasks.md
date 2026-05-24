@@ -60,7 +60,7 @@ Stack:
   - Add a placeholder `index.ts` in each directory so import paths resolve before content is filled in
   - _Requirements: 14.1, 15.1_
 
-- [~] 0.7 Checkpoint — bootstrap green
+- [x] 0.7 Checkpoint — bootstrap green
   - `npm run lint`, `npm run build`, and all four test tiers run green on an empty project
   - Ensure all tests pass, ask the user if questions arise.
 
@@ -99,12 +99,12 @@ Stack:
   - First-run logic (filled in Phase 16) will copy this template to `<userData>/shop.db`
   - _Requirements: 14.1, 14.2_
 
-- [ ] 1.6\* Integration test — schema and PRAGMAs apply correctly
+- [x] 1.6\* Integration test — schema and PRAGMAs apply correctly
   - Open a fresh DB through `prisma.ts`, assert `journal_mode=wal`, `foreign_keys=1`
   - Insert and read one row of each model to confirm the schema accepts the design's shapes
   - _Requirements: 11.1, 15.1_
 
-- [~] 1.7 Checkpoint — DB foundation green
+- [x] 1.7 Checkpoint — DB foundation green
   - Migration applies cleanly, seed produces expected rows, PRAGMAs verified
   - Ensure all tests pass, ask the user if questions arise.
 
@@ -180,12 +180,12 @@ Stack:
   - Add a `useApi()` hook layer that suspends on error envelopes and surfaces toasts for `INTERNAL`/`UNAUTHENTICATED`
   - _Requirements: 1.5_
 
-- [ ] 2.8\* Property test — RBAC matrix exhaustiveness (Property 9 placeholder)
+- [x] 2.8\* Property test — RBAC matrix exhaustiveness (Property 9 placeholder)
   - **Property 9 placeholder:** Static test that every key of `IpcContract` is present in `RBAC` and every role appearing is one of `Admin`/`Cashier`
   - Full Property 9 runtime enforcement test lives in Phase 12
   - _Requirements: 8.1, 8.2, 8.3_
 
-- [~] 2.9 Checkpoint — IPC plumbing green
+- [x] 2.9 Checkpoint — IPC plumbing green
   - A trivial echo channel routes through middleware, returns `Result`, and a renderer dummy page can call it
   - Ensure all tests pass, ask the user if questions arise.
 
@@ -202,7 +202,7 @@ Stack:
   - Every list service in `src/main/services/` MUST call this helper rather than rolling its own cursor SQL
   - _Requirements: 15.4, 16.1, 16.2, 16.3, 16.4, 16.9_
 
-- [ ] 2.5.2\* Unit tests for `paginateCursor`
+- [x] 2.5.2\* Unit tests for `paginateCursor`
   - Cursor encode/decode round-trip across a synthetic 5,000-row in-memory dataset
   - `pageSize` clamping: input `0`, `-1`, `201`, and `1_000_000` all clamped to `[1, 200]`
   - `withCount` opt-in: response includes `totalCount` iff requested
@@ -210,7 +210,7 @@ Stack:
   - Walking pages from first to `nextCursor === null` yields exactly the reference query's rows in the same order (Property 16 unit-level scaffold)
   - _Requirements: 16.1, 16.2, 16.3_
 
-- [~] 2.5.3 Checkpoint — pagination helper green
+- [x] 2.5.3 Checkpoint — pagination helper green
   - Helper passes its unit tests; one trivial list channel (e.g. `products:list`) is wired through it end-to-end
   - Ensure all tests pass, ask the user if questions arise.
 
@@ -243,14 +243,14 @@ Stack:
   - On renderer reload, force re-login (sessions are bound to sender id)
   - _Requirements: 1.4, 1.5_
 
-- [ ] 3.6\* Integration tests — auth happy path and rejections
+- [x] 3.6\* Integration tests — auth happy path and rejections
   - Login with valid creds returns a session and role
   - Wrong password returns `Err('VALIDATION')` (or `UNAUTHENTICATED` per envelope) and increments no audit row
   - `setup:createInitialAdmin` is rejected once an Admin already exists
   - `passwordHash` is never present in any IPC response
   - _Requirements: 1.1, 1.2, 1.3, 1.6_
 
-- [~] 3.7 Checkpoint — auth green
+- [x] 3.7 Checkpoint — auth green
   - Fresh install routes to setup, after admin creation the login screen accepts the new admin, and protected channels reject calls without a session
   - Ensure all tests pass, ask the user if questions arise.
 
@@ -290,63 +290,63 @@ Stack:
   - Mock IPC; assert page accumulation matches concatenated mock pages, debounce window suppresses intermediate requests, and DOM-mounted row count stays bounded for a 10,000-row mock dataset
   - _Requirements: 16.5_
 
-- [~] 4.5\* Property test — Property 7: uniqueness of product identifiers
+- [x] 4.5\* Property test — Property 7: uniqueness of product identifiers
   - **Property 7: Uniqueness of product identifiers**
   - **Validates: Requirements 2.2, 2.3**
   - fast-check generator yields random product inputs; assert any second insert that reuses a `sku` or `barcode` is rejected and that no two persisted products share `sku` or `barcode`
 
-- [ ] 4.6\* Integration test — price-change audit
+- [x] 4.6\* Integration test — price-change audit
   - Update `sellPrice`, assert exactly one new `audit_logs` row of type `price.change` with correct previous/next
   - _Requirements: 2.4, 13.1_
 
-- [~] 4.7 Checkpoint — products green
+- [x] 4.7 Checkpoint — products green
   - Admin can create, edit, list products; barcode uniqueness rejected; price change appears in audit log
   - Ensure all tests pass, ask the user if questions arise.
 
 ### Phase 5 — Inventory ledger (the heart)
 
-- [~] 5.1 InventoryService — ledger writer
+- [x] 5.1 InventoryService — ledger writer
   - Implement `inventory.service.ts` with internal `applyMovement(tx, {productId, delta, type, refType, refId, userId})` helper used by every business tx
   - The helper updates `Inventory.onHand` (decrement or increment) AND inserts exactly one `InventoryMovement` inside the caller's `$transaction`
   - Throw `OutOfStockError(productId)` if `onHand + delta < 0`
   - _Requirements: 3.1, 3.2, 3.7, 11.4_
 
-- [~] 5.2 InventoryService — manual adjustment
+- [x] 5.2 InventoryService — manual adjustment
   - Public `adjust({productId, delta, reason}, ctx)` opens a `$transaction`, calls `applyMovement`, writes an `audit_logs` row of type `stock.adjust`, and writes a `journal_entries` row of opType `adjustment`
   - Wire `inventory:adjust` (Admin only)
   - _Requirements: 3.5, 13.3_
 
-- [~] 5.3 InventoryService — low-stock query
+- [x] 5.3 InventoryService — low-stock query
   - Implement `lowStockCount()` and `lowStockList()` using `Inventory.onHand <= Product.reorderLevel`
   - Wire `inventory:lowStockCount`, `inventory:lowStock`
   - _Requirements: 3.6_
 
-- [~] 5.5.1 InventoryMovement paginated list service and IPC channel
+- [x] 5.5.1 InventoryMovement paginated list service and IPC channel
   - Implement `inventory.service.ts#listMovements(req)` calling `paginateCursor` on `InventoryMovement` ordered by `(timestamp DESC, id)`; supports filters `productId`, `movementType`, `dateFrom`, `dateTo`
   - Wire `inventory_movements:list` and the companion `inventory_movements:count` (Admin only) through the router
   - _Requirements: 3.1, 16.1, 16.2, 16.3, 16.4_
 
-- [~] 5.5.2 Inventory movements browser page (Admin)
+- [x] 5.5.2 Inventory movements browser page (Admin)
   - `src/renderer/features/inventory/MovementsBrowserPage.tsx`: virtualized table via `<VirtualizedTable>`, filters for product (typeahead), movement type (`sale` | `purchase` | `adjustment` | `return`), and date range; row click navigates to the originating sale/purchase/adjustment
   - Uses `inventory_movements:list` with cursor pagination
   - _Requirements: 3.1, 8.2, 16.1, 16.5_
 
-- [~] 5.4 Manual stock adjustment UI
+- [x] 5.4 Manual stock adjustment UI
   - `src/renderer/features/inventory/AdjustPage.tsx`: pick product, enter delta, reason; Admin only
   - On success, toast and refresh
   - _Requirements: 3.5, 8.2_
 
-- [~] 5.5\* Property test — Property 1: inventory ledger identity
+- [x] 5.5\* Property test — Property 1: inventory ledger identity
   - **Property 1: Inventory ledger identity**
   - **Validates: Requirements 3.1, 3.2, 11.4**
   - fast-check generates random sequences of purchases, sales, and adjustments; after each commit, assert `Inventory.onHand == sum(InventoryMovement.quantityDelta)` for every touched product
 
-- [ ] 5.6\* Property test — Property 3: non-negative on-hand
+- [x] 5.6\* Property test — Property 3: non-negative on-hand
   - **Property 3: Non-negative on-hand**
   - **Validates: Requirement 3.7**
   - Generate sequences that include over-stock sale attempts; assert every commit leaves `onHand >= 0` and that out-of-stock attempts produce `Err('OUT_OF_STOCK')` and no movement rows
 
-- [~] 5.7 Checkpoint — inventory ledger green
+- [x] 5.7 Checkpoint — inventory ledger green
   - Manual adjustment works, ledger identity holds under property tests, low-stock query is correct
   - Ensure all tests pass, ask the user if questions arise.
 

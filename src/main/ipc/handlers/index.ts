@@ -11,9 +11,17 @@
 //                                           setup:createInitialAdmin
 //   - categories.ts (Phase 4, task 4.1)  — categories:list/upsert/delete
 //   - products.ts   (Phase 4, task 4.2)  — products:list/count/upsert
+//   - inventory.ts  (Phase 5, tasks 5.2 + 5.3) — inventory:adjust,
+//                                           inventory:lowStockCount
+//   - reports.ts    (Phase 5, task 5.3)  — reports:lowStock
+//                                          (Phase 10 extends this with
+//                                           dailySales / monthlySales /
+//                                           topSelling / export)
 //   - pos.ts        (Phase 7)            — pos:scan, pos:finalize
 //   - …
 
 export { registerAuthHandlers } from './auth.js';
 export { registerCategoriesHandlers } from './categories.js';
+export { registerInventoryHandlers } from './inventory.js';
 export { registerProductsHandlers } from './products.js';
+export { registerReportsHandlers } from './reports.js';

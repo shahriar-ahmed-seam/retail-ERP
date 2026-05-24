@@ -8,7 +8,9 @@ import { connect, disconnect } from '@main/db/index.js';
 import {
   registerAuthHandlers,
   registerCategoriesHandlers,
+  registerInventoryHandlers,
   registerProductsHandlers,
+  registerReportsHandlers,
 } from '@main/ipc/handlers/index.js';
 import { bindIpcHandlers } from '@main/ipc/index.js';
 
@@ -53,6 +55,8 @@ async function bootstrapMain(): Promise<void> {
   registerAuthHandlers();
   registerCategoriesHandlers();
   registerProductsHandlers();
+  registerInventoryHandlers();
+  registerReportsHandlers();
   // Future handler groups (pos, purchases, …) plug in here.
   bindIpcHandlers(ipcMain);
 }
