@@ -74,6 +74,7 @@ import {
 } from '@prisma/client';
 
 import { prisma } from '@main/db/prisma.js';
+import { runPostCommitPrint } from '@main/printing/printer.js';
 import { applyMovement, OutOfStockError } from '@main/services/inventory.service.js';
 import { validateTotalsIdentity } from '@shared/pos-totals.js';
 import { Err, Ok, type Result } from '@shared/result.js';
@@ -768,11 +769,14 @@ async function finalizeSale(
       return { saleId: sale.id, serialNo, sale: toSaleDTO(sale) };
     });
 
-    // After commit — Phase 8 task 8.5 will hook in the printer
-    // chain here: `selectPrinter(committed.sale)`. Printer failures
-    // must never roll back the sale (design.md), so the post-commit
-    // I/O lives outside the transaction. Nothing to do until then.
-    // TODO(phase-8): trigger printer chain via `selectPrinter`.
+    // After commit — Phase 8 task 8.5 hooks in the printer chain
+    // here. `runPostCommitPrint` is fire-and-forget: it never
+    // throws, swallows errors via `console.error`, and the caller
+    // `void`s the returned promise so a jammed printer cannot
+    // back-pressure the POS UI or surface as an
+    // `unhandledRejection`. Printer failures must never roll back
+    // the sale (Req 4.9, design.md > "Print after commit").
+    void runPostCommitPrint(committed.sale);
 
     return Ok(committed);
   } catch (err) {

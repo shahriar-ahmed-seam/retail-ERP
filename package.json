@@ -65,6 +65,8 @@
     "@prisma/client": "^6.19.3",
     "bcrypt": "^5.1.1",
     "decimal.js": "^10.6.0",
+    "node-thermal-printer": "4.6.0",
+    "pdfkit": "0.18.0",
     "react-window": "^2.2.7"
   }
 }

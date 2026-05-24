@@ -443,26 +443,26 @@ Stack:
 
 ### Phase 8 — Receipt printing
 
-- [ ] 8.1 Receipt DTO and renderer
+- [x] 8.1 Receipt DTO and renderer
   - Implement `src/shared/dto/receipt.ts` `ReceiptDTO` with shop info, sale serial, lines, totals, payments, timestamp
   - Implement `src/main/printing/receipt.render.ts` building the DTO from a committed sale
   - _Requirements: 4.7, 4.8_
 
-- [ ] 8.2 ESC/POS adapter
+- [x] 8.2 ESC/POS adapter
   - Implement `src/main/printing/escpos.adapter.ts` using `node-thermal-printer`
   - Reads `Setting 'printer.escpos'` for `{kind, target}`; supports `usb`, `serial`, `network`
   - `print(receipt)` throws on hardware/timeout failure
   - _Requirements: 4.7_
 
-- [ ] 8.3 HTML adapter
+- [x] 8.3 HTML adapter
   - Implement `src/main/printing/html.adapter.ts` rendering an HTML receipt template and triggering Electron `webContents.print({silent: true, deviceName})`
   - _Requirements: 4.8_
 
-- [ ] 8.4 PDF adapter (last-resort)
+- [x] 8.4 PDF adapter (last-resort)
   - Implement `src/main/printing/pdf.adapter.ts` using `pdfkit` writing to `<userData>/receipts/INV-XXXXXX.pdf`
   - _Requirements: 4.8_
 
-- [ ] 8.5 ChainAdapter and `selectPrinter()`
+- [x] 8.5 ChainAdapter and `selectPrinter()`
   - Implement `src/main/printing/printer.ts` with `ChainAdapter` trying ESC/POS → HTML → PDF; first success wins
   - Wire from POSService after `finalizeSale` commit; printer failures never roll back the sale
   - _Requirements: 4.7, 4.8, 4.9_

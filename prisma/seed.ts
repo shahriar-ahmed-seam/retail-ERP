@@ -24,6 +24,17 @@
 //        - `backup.lastSnapshot`  -> empty string, ISO timestamp of most
 //                                    recent successful snapshot once the
 //                                    Backup_System runs (Req 10.1).
+//        - `shop.name`            -> placeholder shop name printed at the
+//                                    top of every receipt (Req 4.7);
+//                                    defaults applied by the receipt
+//                                    renderer when blank.
+//        - `shop.address`         -> empty string, optional address line
+//                                    on the receipt header.
+//        - `shop.phone`           -> empty string, optional phone line on
+//                                    the receipt header.
+//        - `shop.taxId`           -> empty string, optional tax-id /
+//                                    registration line on the receipt
+//                                    header.
 //
 // The seed is deliberately self-contained — it does not import from
 // `src/main/db/prisma.ts` because that wrapper applies WAL/FK PRAGMAs that
@@ -44,6 +55,15 @@ const SETTINGS: readonly { key: string; value: string }[] = [
   { key: 'backup.retentionDays', value: '14' },
   { key: 'printer.escpos', value: JSON.stringify({ kind: 'usb', target: '' }) },
   { key: 'backup.lastSnapshot', value: '' },
+  // Shop info printed on every receipt (Req 4.7). The receipt renderer
+  // (`src/main/printing/receipt-renderer.ts`) treats an empty string the
+  // same as a missing row: `shop.name` falls back to `'Shop'`, the
+  // optional fields collapse to `null` so the line is suppressed. This
+  // keeps a fresh install printable before the operator visits Settings.
+  { key: 'shop.name', value: 'Core Retail Shop' },
+  { key: 'shop.address', value: '' },
+  { key: 'shop.phone', value: '' },
+  { key: 'shop.taxId', value: '' },
 ];
 
 /**
