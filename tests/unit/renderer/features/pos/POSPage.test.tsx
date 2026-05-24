@@ -1,0 +1,661 @@
+/**
+ * Unit tests for the POS single-screen page (tasks 7.5 + 7.6).
+ *
+ * Mounts the real component against a stubbed `window.api`, mirroring
+ * the conventions established by `PurchaseCreatePage.test.tsx` and
+ * `AdjustPage.test.tsx`.
+ *
+ * Coverage:
+ *   - Empty cart keeps Finalize disabled.
+ *   - Scan a product → cart row appears with quantity 1.
+ *   - Scan the same product twice → quantity becomes 2.
+ *   - Edit quantity → totals update.
+ *   - Apply 10% discount → discount + grand total update; tax computed
+ *     on post-discount subtotal.
+ *   - Apply fixed discount > subtotal → clamped to subtotal.
+ *   - Add cash payment matching grand total → Finalize enabled.
+ *   - Add cash payment less than grand total → Finalize disabled,
+ *     remaining balance shows the difference.
+ *   - Submit calls `pos:finalize` with the exact wire shape (totals
+ *     match the live values).
+ *   - Successful submit clears the cart and renders the success
+ *     banner with the serial number.
+ *   - `OUT_OF_STOCK` envelope marks the offending line, cart preserved,
+ *     Finalize disabled.
+ *   - `VALIDATION` envelope renders a banner with the field name.
+ *   - `FK_VIOLATION` envelope renders the "customer or product not
+ *     found" copy.
+ *
+ * Validates: Requirements 4.1, 4.4, 4.5, 4.6, 7.4, 14.3.
+ */
+
+import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import Decimal from 'decimal.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+import { POSPage } from '@renderer/features/pos/POSPage';
+import { Err, Ok } from '@shared/result';
+
+import type { Api } from '@renderer/lib/api';
+import type {
+  CustomerDTO,
+  FinalizeSaleInput,
+  ProductDTO,
+  SaleDTO,
+} from '@shared/dto/index';
+import type { ListResponse } from '@shared/ipc-contract';
+
+// ---------------------------------------------------------------------------
+// jsdom shims & global helpers
+// ---------------------------------------------------------------------------
+
+type GlobalWithWindow = typeof globalThis & {
+  window: Window & { api?: Partial<Api> };
+};
+
+const g = globalThis as unknown as GlobalWithWindow;
+
+function installApi(stub: Partial<Api>): void {
+  g.window.api = stub;
+}
+
+function uninstallApi(): void {
+  delete g.window.api;
+}
+
+afterEach(() => {
+  uninstallApi();
+  vi.useRealTimers();
+});
+
+// ---------------------------------------------------------------------------
+// Fixtures
+// ---------------------------------------------------------------------------
+
+function makeProduct(i: number, overrides: Partial<ProductDTO> = {}): ProductDTO {
+  return {
+    id: `p-${String(i)}`,
+    sku: `SKU-${String(i)}`,
+    name: `Product ${String(i)}`,
+    categoryId: 'c-fruit',
+    categoryName: 'Fruit',
+    barcode: `BC-${String(i)}`,
+    buyPrice: '5.00',
+    sellPrice: '10.00',
+    taxRate: '0.10',
+    warrantyMonths: 0,
+    reorderLevel: 0,
+    onHand: 5,
+    ...overrides,
+  };
+}
+
+function makeSaleDTO(overrides: Partial<SaleDTO> = {}): SaleDTO {
+  return {
+    id: 'sale-1',
+    serialNo: 'INV-000001',
+    customerId: null,
+    customerName: null,
+    cashierId: 'u-1',
+    cashierName: 'cashier',
+    subtotal: '0',
+    discount: '0',
+    taxTotal: '0',
+    grandTotal: '0',
+    createdAt: '2026-05-24T12:00:00.000Z',
+    items: [],
+    payments: [],
+    ...overrides,
+  };
+}
+
+function pageOf<T>(rows: readonly T[]): ListResponse<T> {
+  return { rows, nextCursor: null };
+}
+
+// ---------------------------------------------------------------------------
+// API stub builder
+// ---------------------------------------------------------------------------
+
+interface BuiltStub {
+  readonly stub: Partial<Api>;
+  readonly posScan: ReturnType<typeof vi.fn>;
+  readonly posFinalize: ReturnType<typeof vi.fn>;
+  readonly customersList: ReturnType<typeof vi.fn>;
+}
+
+function buildStub(opts: {
+  scanByBarcode?: Readonly<Record<string, ProductDTO | null>>;
+  finalize?: ReturnType<typeof vi.fn>;
+  customers?: readonly CustomerDTO[];
+}): BuiltStub {
+  const map = opts.scanByBarcode ?? {};
+  const posScan = vi.fn((req: { barcode: string }) => {
+    const found = map[req.barcode];
+    if (found === undefined) {
+      return Promise.resolve(Ok(null));
+    }
+    return Promise.resolve(Ok(found));
+  });
+
+  const posFinalize =
+    opts.finalize ??
+    vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-1',
+          serialNo: 'INV-000001',
+          sale: makeSaleDTO(),
+        }),
+      ),
+    );
+
+  const customersList = vi.fn(() =>
+    Promise.resolve(Ok(pageOf(opts.customers ?? []))),
+  );
+
+  const stub: Partial<Api> = {
+    'pos:scan': posScan,
+    'pos:finalize': posFinalize,
+    'customers:list': customersList,
+  };
+  return { stub, posScan, posFinalize, customersList };
+}
+
+// ---------------------------------------------------------------------------
+// Interaction helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Simulate a barcode scan via the keyboard-driven Enter path. Uses the
+ * page's form submit so the scan settle effect doesn't race with the
+ * test (the Enter path is synchronous from the input's POV).
+ */
+async function scanBarcode(opts: {
+  user: ReturnType<typeof userEvent.setup>;
+  barcode: string;
+}): Promise<void> {
+  const input = screen.getByTestId('pos-scanner-input');
+  await opts.user.clear(input);
+  await opts.user.type(input, `${opts.barcode}{Enter}`);
+}
+
+// ---------------------------------------------------------------------------
+// Tests — initial state
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — initial state', () => {
+  it('keeps Finalize disabled on an empty cart', () => {
+    const built = buildStub({});
+    installApi(built.stub);
+
+    render(<POSPage />);
+
+    expect(screen.getByTestId('pos-finalize')).toBeDisabled();
+    expect(screen.getByTestId('pos-cart-empty')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — scanner
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — scanner', () => {
+  it('appends a cart row with quantity 1 on a successful scan', async () => {
+    const product = makeProduct(1, { barcode: 'BC-1' });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+
+    await waitFor(() => {
+      expect(built.posScan).toHaveBeenCalledWith({ barcode: 'BC-1' });
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${product.id}`),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
+    ).toHaveValue('1');
+  });
+
+  it('increments quantity when the same product is scanned twice', async () => {
+    const product = makeProduct(1, { barcode: 'BC-1' });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
+      ).toHaveValue('1');
+    });
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
+      ).toHaveValue('2');
+    });
+  });
+
+  it('shows a "no product" message when the barcode does not match', async () => {
+    const built = buildStub({});
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'UNKNOWN' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-scan-message')).toHaveTextContent(
+        /no product with barcode UNKNOWN/i,
+      );
+    });
+    expect(screen.queryByTestId('pos-cart-empty')).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — totals
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — totals', () => {
+  it('updates totals when cart quantity is edited', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('10.00');
+    });
+
+    const qty = screen.getByTestId(`pos-cart-row-${product.id}-quantity`);
+    await user.clear(qty);
+    await user.type(qty, '4');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('40.00');
+    });
+    expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('40.00');
+  });
+
+  it('applies a 10% discount and computes tax on the post-discount subtotal', async () => {
+    // 1 × 100.00 @ 18% tax. 10% discount → discountAmount 10, taxableBase 90,
+    // taxTotal 90 * 0.18 = 16.20, grand 90 + 16.20 = 106.20.
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '100.00',
+      taxRate: '0.18',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('100.00');
+    });
+
+    await user.click(screen.getByTestId('pos-discount-kind-percent'));
+    const percentInput = screen.getByTestId('pos-discount-percent');
+    await user.clear(percentInput);
+    await user.type(percentInput, '0.10');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-discount')).toHaveTextContent('10.00');
+    });
+    expect(screen.getByTestId('pos-totals-tax')).toHaveTextContent('16.20');
+    expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('106.20');
+  });
+
+  it('clamps a fixed discount > subtotal to the subtotal', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '50.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('50.00');
+    });
+
+    const amount = screen.getByTestId('pos-discount-amount');
+    await user.clear(amount);
+    await user.type(amount, '999');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-discount')).toHaveTextContent('50.00');
+    });
+    expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('0.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — payments + finalize gating
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — payments', () => {
+  it('keeps Finalize disabled when payment sum is below grand total', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '20.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('20.00');
+    });
+
+    // Add a cash payment, then edit it down to less than grand total.
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    const list = screen.getByTestId('pos-payment-list');
+    const amountInput = list.querySelector<HTMLInputElement>(
+      'input[data-testid$="-amount"]',
+    );
+    expect(amountInput).not.toBeNull();
+    if (amountInput === null) throw new Error('payment amount input missing');
+    await user.clear(amountInput);
+    await user.type(amountInput, '5');
+
+    expect(screen.getByTestId('pos-finalize')).toBeDisabled();
+    expect(screen.getByTestId('pos-payment-remaining')).toHaveTextContent('15.00');
+  });
+
+  it('enables Finalize once payments equal grand total', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '20.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('20.00');
+    });
+
+    // The "Add Cash" button pre-fills the running balance, so Finalize
+    // becomes enabled immediately.
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+    expect(screen.getByTestId('pos-payment-remaining')).toHaveTextContent('0.00');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — finalize wire shape + success
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — successful finalize', () => {
+  it('forwards the exact wire shape to pos:finalize and clears the cart on success', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-42',
+          serialNo: 'INV-000042',
+          sale: makeSaleDTO({ id: 'sale-42', serialNo: 'INV-000042' }),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const onFinalized = vi.fn();
+    const user = userEvent.setup();
+    render(<POSPage onFinalized={onFinalized} />);
+
+    // Build a cart with quantity 2.
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
+      ).toHaveValue('2');
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('20.00');
+    });
+
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+
+    const payload = finalize.mock.calls[0]?.[0] as
+      | FinalizeSaleInput
+      | undefined;
+    expect(payload).not.toBeUndefined();
+    if (payload === undefined) throw new Error('finalize payload missing');
+
+    expect(payload.customerId).toBeNull();
+    expect(payload.items).toHaveLength(1);
+    expect(payload.items[0]).toEqual({
+      productId: product.id,
+      quantity: 2,
+      unitPrice: '10.00',
+      taxRate: '0.00',
+      lineTotal: '20',
+    });
+    expect(payload.discount).toEqual({ kind: 'fixed', amount: '0' });
+
+    // The renderer's totals must agree to the bit with the live values.
+    expect(new Decimal(payload.subtotal).equals(new Decimal('20'))).toBe(true);
+    expect(new Decimal(payload.discountAmount).equals(new Decimal('0'))).toBe(
+      true,
+    );
+    expect(new Decimal(payload.taxTotal).equals(new Decimal('0'))).toBe(true);
+    expect(new Decimal(payload.grandTotal).equals(new Decimal('20'))).toBe(true);
+
+    expect(payload.payments).toHaveLength(1);
+    expect(payload.payments[0]?.method).toBe('cash');
+    expect(new Decimal(payload.payments[0]?.amount ?? '0').equals(new Decimal('20'))).toBe(
+      true,
+    );
+
+    // Success banner + cart cleared.
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-banner-success')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('pos-banner-success-serial')).toHaveTextContent(
+      'INV-000042',
+    );
+    expect(screen.getByTestId('pos-cart-empty')).toBeInTheDocument();
+    expect(onFinalized).toHaveBeenCalledTimes(1);
+    expect(onFinalized.mock.calls[0]?.[0]).toMatchObject({
+      id: 'sale-42',
+      serialNo: 'INV-000042',
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests — server error mapping
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — server error mapping', () => {
+  it('marks the offending line and disables Finalize on OUT_OF_STOCK', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(Err('OUT_OF_STOCK', { productId: product.id })),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalled();
+    });
+
+    // Cart preserved.
+    expect(screen.getByTestId(`pos-cart-row-${product.id}`)).toBeInTheDocument();
+    // Inline OOS marker present.
+    expect(
+      screen.getByTestId(`pos-cart-row-${product.id}-out-of-stock`),
+    ).toBeInTheDocument();
+    // Finalize disabled while line is OOS.
+    expect(screen.getByTestId('pos-finalize')).toBeDisabled();
+    // Banner present too.
+    expect(screen.getByTestId('pos-banner-error')).toBeInTheDocument();
+    expect(screen.getByTestId('pos-banner-error-code')).toHaveTextContent(
+      'OUT_OF_STOCK',
+    );
+  });
+
+  it('renders the field name on a VALIDATION envelope', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Err('VALIDATION', {
+          field: 'grandTotal',
+          expected: '11.00',
+          actual: '10.00',
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-banner-error')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('pos-banner-error-code')).toHaveTextContent(
+      'VALIDATION',
+    );
+    expect(screen.getByTestId('pos-banner-error-field')).toHaveTextContent(
+      'grandTotal',
+    );
+    expect(screen.getByTestId('pos-banner-error-expected')).toHaveTextContent(
+      '11.00',
+    );
+    expect(screen.getByTestId('pos-banner-error-actual')).toHaveTextContent(
+      '10.00',
+    );
+  });
+
+  it('renders the customer-or-product copy on FK_VIOLATION', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(Err('FK_VIOLATION', { reason: 'not_found' })),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+
+    await user.click(screen.getByTestId('pos-finalize'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-banner-error-message')).toHaveTextContent(
+        /customer or product not found/i,
+      );
+    });
+  });
+});
