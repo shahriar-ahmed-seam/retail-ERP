@@ -91,6 +91,16 @@ function buildBaseStub(extra: Partial<Api> = {}): Partial<Api> {
       .mockResolvedValue(Ok({ required: false })),
     'inventory:lowStockCount': vi.fn().mockResolvedValue(Ok({ count: 0 })),
     'auth:logout': vi.fn().mockResolvedValue(Ok(undefined)),
+    'reports:dailySales': vi.fn().mockResolvedValue(
+      Ok({
+        date: '2024-01-15',
+        salesCount: 0,
+        totalRevenue: '0',
+        totalTax: '0',
+        totalDiscount: '0',
+        paymentBreakdown: [],
+      }),
+    ),
     ...extra,
   };
 }

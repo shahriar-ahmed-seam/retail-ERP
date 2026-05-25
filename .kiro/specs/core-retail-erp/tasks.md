@@ -677,19 +677,19 @@ Stack:
   - `src/renderer/App.tsx` + `routes.tsx`: route-level guards based on session role; redirect to login if no session; Cashier home navigates straight to POS, Admin home navigates to dashboard
   - _Requirements: 1.5, 8.3, 14.3_
 
-- [ ] 13.2 Admin dashboard home
+- [x] 13.2 Admin dashboard home
   - `src/renderer/features/dashboard/DashboardPage.tsx`: today's sales total, today's transaction count, low-stock count, quick links to POS, products, reports, backup
   - _Requirements: 9.1, 3.6_
 
-- [ ] 13.3 Cashier home → POS direct
+- [x] 13.3 Cashier home → POS direct
   - On Cashier login, route directly to POS; provide top-bar logout
   - _Requirements: 14.3_
 
-- [ ] 13.4 Toast and error system
+- [x] 13.4 Toast and error system
   - `src/renderer/components/ui/Toast.tsx` + provider; central handler that maps `ErrorEnvelope.code` to user-friendly messages; inline form errors via field-level state
   - _Requirements: 1.2, 3.7, 4.8, 4.9, 5.5_ (envelope-driven error surfacing)
 
-- [ ] 13.5 POS keyboard shortcuts F1–F9
+- [x] 13.5 POS keyboard shortcuts F1–F9
   - Bind: `F1` add product manually, `F2` apply discount, `F3` attach customer, `F4` pay cash, `F5` pay card, `F6` pay mobile, `F9` finalize
   - Show shortcut hints on hover
   - _Requirements: 4, 14.3_
@@ -698,7 +698,7 @@ Stack:
   - Mount `LowStockBanner` (built in 10.9) in shell layout; visible on every authenticated route
   - _Requirements: 3.6_
 
-- [ ] 13.7 Checkpoint — shell + UX green
+- [x] 13.7 Checkpoint — shell + UX green
   - Shell routes correctly per role; banner renders; toasts surface envelope errors; F-keys drive POS without mouse
   - Ensure all tests pass, ask the user if questions arise.
 

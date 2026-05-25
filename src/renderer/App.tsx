@@ -36,6 +36,8 @@ import {
 } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
+import { ToastBridge } from '@renderer/components/ToastBridge';
+import { ToastProvider } from '@renderer/components/ui';
 import { SetupPage } from '@renderer/features/setup';
 import { useApi } from '@renderer/lib/api';
 import { useAuth } from '@renderer/lib/auth-context';
@@ -114,7 +116,12 @@ export function App(): ReactElement {
   }, [api, session]);
 
   if (setupRequired === null) {
-    return <SetupProbeSplash />;
+    return (
+      <ToastProvider>
+        <ToastBridge />
+        <SetupProbeSplash />
+      </ToastProvider>
+    );
   }
 
   // Setup branch. Renders outside the router so first-run setup is
@@ -124,7 +131,8 @@ export function App(): ReactElement {
   // route tree's authenticated subtree directly.
   if (setupRequired) {
     return (
-      <>
+      <ToastProvider>
+        <ToastBridge />
         <SetupPage />
         {setupProbeError !== null ? (
           <div
@@ -141,13 +149,16 @@ export function App(): ReactElement {
             Setup probe failed: {setupProbeError}
           </div>
         ) : null}
-      </>
+      </ToastProvider>
     );
   }
 
   return (
-    <MemoryRouter initialEntries={['/']}>
-      <AppRoutes />
-    </MemoryRouter>
+    <ToastProvider>
+      <ToastBridge />
+      <MemoryRouter initialEntries={['/']}>
+        <AppRoutes />
+      </MemoryRouter>
+    </ToastProvider>
   );
 }

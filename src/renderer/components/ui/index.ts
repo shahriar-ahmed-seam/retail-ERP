@@ -1,3 +1,14 @@
-// Placeholder barrel for shared renderer UI primitives.
-// Populated as cross-feature components are extracted (Phases 3 onward).
-export {};
+// Renderer UI primitives barrel.
+//
+// Cross-feature components live here so feature pages can import them
+// from `@renderer/components/ui` without referencing relative paths.
+
+export {
+  errorEnvelopeToToast,
+  ToastProvider,
+  useToast,
+  type ToastContextValue,
+  type ToastOptions,
+  type ToastProviderProps,
+  type ToastVariant,
+} from './Toast';

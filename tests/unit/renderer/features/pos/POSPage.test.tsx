@@ -980,3 +980,212 @@ describe('<POSPage /> — customer attach', () => {
     expect(screen.queryByTestId('pos-customer-selected')).not.toBeInTheDocument();
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// Tests — keyboard shortcuts F1–F9 (task 13.5)
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — keyboard shortcuts', () => {
+  /** Fire a fresh `F<n>` keydown on the document. */
+  function fireFKey(key: 'F1' | 'F2' | 'F3' | 'F4' | 'F5' | 'F6' | 'F9'): void {
+    window.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }),
+    );
+  }
+
+  it('F4 adds a cash payment for the running balance', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '20.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent(
+        '20.00',
+      );
+    });
+
+    // Defocus the scanner so F-keys do not race the input.
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F4');
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-payment-list')).toBeInTheDocument();
+    });
+    expect(screen.getByTestId('pos-payment-remaining')).toHaveTextContent(
+      '0.00',
+    );
+    // Finalize is now enabled because the cash payment matches the
+    // grand total.
+    expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+  });
+
+  it('F5 adds a card payment and F6 adds a mobile payment', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '15.00',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+    await scanBarcode({ user, barcode: 'BC-1' });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F5');
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-payment-list')).toBeInTheDocument();
+    });
+    // First payment is card.
+    expect(
+      screen.getByTestId('pos-payment-list'),
+    ).toHaveTextContent(/card/i);
+
+    // Then drop the card amount to 0 and add a mobile payment for the
+    // remaining balance.
+    const list = screen.getByTestId('pos-payment-list');
+    const amountInput = list.querySelector<HTMLInputElement>(
+      'input[data-testid$="-amount"]',
+    );
+    if (amountInput === null) throw new Error('payment row missing');
+    await user.clear(amountInput);
+    await user.type(amountInput, '0');
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F6');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId('pos-payment-list'),
+      ).toHaveTextContent(/mobile/i);
+    });
+  });
+
+  it('F9 fires finalize when canFinalize is true', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn(() =>
+      Promise.resolve(
+        Ok({
+          saleId: 'sale-9',
+          serialNo: 'INV-000009',
+          sale: makeSaleDTO({ id: 'sale-9', serialNo: 'INV-000009' }),
+        }),
+      ),
+    );
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F9');
+
+    await waitFor(() => {
+      expect(finalize).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('F9 does nothing when canFinalize is false (empty cart)', async () => {
+    const finalize = vi.fn();
+    const built = buildStub({ finalize });
+    installApi(built.stub);
+
+    render(<POSPage />);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F9');
+
+    // Give the handler time to run; finalize should still be untouched.
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it('F1 focuses the scanner input', async () => {
+    const built = buildStub({});
+    installApi(built.stub);
+
+    render(<POSPage />);
+    (document.activeElement as HTMLElement | null)?.blur();
+    expect(document.activeElement).not.toBe(
+      screen.getByTestId('pos-scanner-input'),
+    );
+
+    fireFKey('F1');
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByTestId('pos-scanner-input'),
+      );
+    });
+  });
+
+  it('F2 focuses the active discount input', async () => {
+    const built = buildStub({});
+    installApi(built.stub);
+
+    render(<POSPage />);
+    (document.activeElement as HTMLElement | null)?.blur();
+
+    fireFKey('F2');
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        screen.getByTestId('pos-discount-amount'),
+      );
+    });
+  });
+
+  it('F-keys are ignored while a non-scanner input is focused', async () => {
+    const product = makeProduct(1, {
+      barcode: 'BC-1',
+      sellPrice: '10.00',
+      taxRate: '0.00',
+    });
+    const finalize = vi.fn();
+    const built = buildStub({
+      scanByBarcode: { 'BC-1': product },
+      finalize,
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+    await scanBarcode({ user, barcode: 'BC-1' });
+    await user.click(screen.getByTestId('pos-payment-add-cash'));
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
+    });
+
+    // Focus the discount input — a real <input> element. F9 should NOT
+    // fire while it's focused so the cashier can edit numbers without
+    // submitting.
+    screen.getByTestId('pos-discount-amount').focus();
+    fireFKey('F9');
+
+    await new Promise((r) => setTimeout(r, 10));
+    expect(finalize).not.toHaveBeenCalled();
+  });
+});

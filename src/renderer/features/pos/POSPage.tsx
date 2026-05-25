@@ -41,7 +41,7 @@
  * POS can capture a walk-in's contact details mid-checkout). Walk-in
  * sales send `customerId: null` on the wire (Req 7.4).
  *
- * Validates: Requirements 4.1, 4.4, 4.5, 4.6, 7.2, 7.4, 14.3.
+ * Validates: Requirements 4.1, 4.4, 4.5, 4.6, 7.2, 7.4, 14.3, 13.5.
  */
 
 import Decimal from 'decimal.js';
@@ -110,6 +110,17 @@ const PAYMENT_LABEL: Readonly<Record<PaymentMethod, string>> = {
   cash: 'Cash',
   card: 'Card',
   mobile: 'Mobile',
+};
+
+/**
+ * Keyboard-shortcut hints surfaced via `title` on each payment button.
+ * Mirrors design.md > "Keyboard-first cashier flow": F4 cash, F5 card,
+ * F6 mobile.
+ */
+const PAYMENT_SHORTCUT_HINT: Readonly<Record<PaymentMethod, string>> = {
+  cash: 'Pay cash (F4)',
+  card: 'Pay card (F5)',
+  mobile: 'Pay mobile (F6)',
 };
 
 // ---------------------------------------------------------------------------
@@ -832,6 +843,127 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     totals.wireDiscount,
   ]);
 
+  // ----- Keyboard shortcuts F1–F9 (task 13.5) ---------------------------
+  // Per design.md > "Keyboard-first cashier flow":
+  //   F1 add product manually   → focus the scanner input
+  //   F2 apply discount         → focus the active discount input
+  //   F3 attach customer        → focus the customer search input
+  //   F4 / F5 / F6 pay cash/card/mobile → seed a payment for the
+  //                                       running balance
+  //   F9 finalize               → fires `handleFinalize` if `canFinalize`
+  // Handlers run only when POSPage is mounted and either no element is
+  // focused OR the scanner input is focused (the scanner is the default
+  // focus target so the cashier can drive shortcuts while keeping the
+  // wedge ready). When focus is in any other input/textarea/select the
+  // listener bails out so F-keys do not steal text-edit focus.
+  useEffect(() => {
+    const handler = (event: KeyboardEvent): void => {
+      // Ignore modifier-augmented presses so a future `Ctrl+F4` system
+      // shortcut on Windows is not accidentally swallowed.
+      if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      const key = event.key;
+      if (
+        key !== 'F1' &&
+        key !== 'F2' &&
+        key !== 'F3' &&
+        key !== 'F4' &&
+        key !== 'F5' &&
+        key !== 'F6' &&
+        key !== 'F9'
+      ) {
+        return;
+      }
+      const active = document.activeElement;
+      const isFormElement =
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        active instanceof HTMLSelectElement;
+      const isScanner =
+        active instanceof HTMLInputElement &&
+        active.getAttribute('data-testid') === 'pos-scanner-input';
+      // Suppress shortcuts when any non-scanner input/textarea is
+      // focused so the cashier can edit a quantity or a discount field
+      // without function keys hijacking focus.
+      if (isFormElement && !isScanner) return;
+
+      switch (key) {
+        case 'F1': {
+          event.preventDefault();
+          scannerInputRef.current?.focus();
+          scannerInputRef.current?.select();
+          return;
+        }
+        case 'F2': {
+          event.preventDefault();
+          // Either the fixed-amount or the percent input is mounted at
+          // a time depending on the discount kind. Query both so we
+          // focus whichever one is currently visible.
+          const target = document.querySelector<HTMLInputElement>(
+            '[data-testid="pos-discount-amount"], [data-testid="pos-discount-percent"]',
+          );
+          target?.focus();
+          target?.select();
+          return;
+        }
+        case 'F3': {
+          event.preventDefault();
+          // When a customer is already attached, F3 detaches so the
+          // picker is reachable. Otherwise it focuses the existing
+          // search input.
+          const focusSearch = (): void => {
+            // Defer so a state-change-driven re-render has time to
+            // mount the search input before we focus it.
+            setTimeout(() => {
+              const el = document.querySelector<HTMLInputElement>(
+                '[data-testid="pos-customer-search"]',
+              );
+              el?.focus();
+            }, 0);
+          };
+          if (customer !== null) {
+            clearCustomer();
+          }
+          focusSearch();
+          return;
+        }
+        case 'F4': {
+          event.preventDefault();
+          if (cart.length > 0 && !submitting) addPayment('cash');
+          return;
+        }
+        case 'F5': {
+          event.preventDefault();
+          if (cart.length > 0 && !submitting) addPayment('card');
+          return;
+        }
+        case 'F6': {
+          event.preventDefault();
+          if (cart.length > 0 && !submitting) addPayment('mobile');
+          return;
+        }
+        case 'F9': {
+          event.preventDefault();
+          if (canFinalize) handleFinalize();
+          return;
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => {
+      window.removeEventListener('keydown', handler);
+    };
+  }, [
+    addPayment,
+    canFinalize,
+    cart.length,
+    clearCustomer,
+    customer,
+    handleFinalize,
+    submitting,
+  ]);
+
   // ---------------------------------------------------------------------
   // Render
   // ---------------------------------------------------------------------
@@ -869,7 +1001,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
             htmlFor={`${idPrefix}-scanner`}
             style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}
           >
-            Scan barcode
+            Scan barcode <span style={{ color: '#777', fontWeight: 400 }}>(F1 to focus)</span>
           </label>
           <input
             ref={scannerInputRef}
@@ -878,6 +1010,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
             type="search"
             autoComplete="off"
             placeholder="Scan or type a barcode and press Enter"
+            title="Add product manually (F1)"
             value={scannerValue}
             onChange={(e) => {
               setScannerValue(e.target.value);
@@ -1319,7 +1452,9 @@ function DiscountControl({
 }: DiscountControlProps): ReactElement {
   return (
     <div data-testid="pos-discount-control">
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Discount</h2>
+      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>
+        Discount <span style={{ color: '#777', fontWeight: 400, fontSize: '0.875rem' }}>(F2)</span>
+      </h2>
       <div role="radiogroup" aria-label="Discount kind" style={{ marginBottom: '0.5rem' }}>
         <label style={{ marginRight: '0.75rem' }}>
           <input
@@ -1351,6 +1486,7 @@ function DiscountControl({
           data-testid="pos-discount-amount"
           type="text"
           inputMode="decimal"
+          title="Apply discount (F2)"
           value={discount.amount}
           onChange={(e) => {
             onAmountChange(e.target.value);
@@ -1366,6 +1502,7 @@ function DiscountControl({
           data-testid="pos-discount-percent"
           type="text"
           inputMode="decimal"
+          title="Apply discount (F2)"
           value={discount.percent}
           onChange={(e) => {
             onPercentChange(e.target.value);
@@ -1442,7 +1579,9 @@ function CustomerAttach({
       : null;
   return (
     <div data-testid="pos-customer-attach">
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>Customer</h2>
+      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1rem' }}>
+        Customer <span style={{ color: '#777', fontWeight: 400, fontSize: '0.875rem' }}>(F3)</span>
+      </h2>
       {customer === null && !creating ? (
         <div>
           <input
@@ -1451,6 +1590,7 @@ function CustomerAttach({
             type="search"
             autoComplete="off"
             placeholder="Search by name (walk-in if blank)"
+            title="Attach customer (F3)"
             value={query}
             onChange={(e) => {
               onQueryChange(e.target.value);
@@ -1726,6 +1866,7 @@ function PaymentPanel({
             key={method}
             type="button"
             data-testid={`pos-payment-add-${method}`}
+            title={PAYMENT_SHORTCUT_HINT[method]}
             onClick={() => {
               onAddPayment(method);
             }}
@@ -1836,6 +1977,7 @@ function PaymentPanel({
         <button
           type="button"
           data-testid="pos-finalize"
+          title="Finalize sale (F9)"
           disabled={!canFinalize}
           onClick={onFinalize}
           style={{

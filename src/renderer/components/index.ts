@@ -20,3 +20,5 @@ export {
 
 export { LowStockBanner } from './LowStockBanner';
 export type { LowStockBannerProps } from './LowStockBanner';
+
+export { ToastBridge } from './ToastBridge';
