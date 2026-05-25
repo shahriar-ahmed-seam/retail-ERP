@@ -15,7 +15,6 @@
  * Validates: Requirements 9.4, 9.5, 8.2, 16.5.
  */
 
-// TODO(13.1): mount via role-aware shell
 import {
   useCallback,
   useEffect,

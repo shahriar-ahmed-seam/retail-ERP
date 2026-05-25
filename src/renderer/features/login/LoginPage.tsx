@@ -65,11 +65,10 @@ export function LoginPage(): ReactElement {
       void (async () => {
         const result = await login(trimmedUsername, password);
         if (result.ok) {
-          // Successful login; the auth context updates and the parent
-          // <App /> swaps the login page out for the role-appropriate
-          // home. TODO(task 13.1): once the router lands, replace the
-          // <App /> branch with a `navigate(roleHomeFor(role))` call so
-          // Cashiers go to `/pos` and Admins go to `/admin/dashboard`.
+          // Successful login; the auth context updates and the
+          // role-aware route tree (task 13.1) automatically redirects
+          // Cashier sessions to `/pos` and Admin sessions to
+          // `/dashboard` via `<HomeRoute />` + `roleHomeFor()`.
           return;
         }
 

@@ -71,6 +71,7 @@
     "node-thermal-printer": "4.6.0",
     "papaparse": "5.4.1",
     "pdfkit": "0.18.0",
+    "react-router-dom": "^6.30.3",
     "react-window": "^2.2.7"
   }
 }

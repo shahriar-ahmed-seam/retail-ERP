@@ -37,7 +37,6 @@
  * Validates: Requirements 7.1, 7.2, 8.3.
  */
 
-// TODO(13.1): mount via role-aware shell
 import {
   useCallback,
   useId,
@@ -225,9 +224,6 @@ function CustomerFormPageInner({
         try {
           const result = await api['customers:upsert'](input);
           if (result.ok) {
-            // TODO(13.1): once the route tree lands, replace this
-            // direct callback with `navigate('/customers')` and a
-            // toast notification carrying the saved DTO.
             onClose(result.value);
             return;
           }

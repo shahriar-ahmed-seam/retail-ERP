@@ -42,7 +42,6 @@
  * Validates: Requirements 13.1, 13.2, 13.3, 13.4, 16.1, 16.5, 8.2.
  */
 
-// TODO(13.1): mount via role-aware shell
 import {
   useEffect,
   useMemo,

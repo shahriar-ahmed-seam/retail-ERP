@@ -673,7 +673,7 @@ Stack:
 
 ### Phase 13 — UI/UX polish and shell
 
-- [ ] 13.1 Routing and role-aware shell
+- [x] 13.1 Routing and role-aware shell
   - `src/renderer/App.tsx` + `routes.tsx`: route-level guards based on session role; redirect to login if no session; Cashier home navigates straight to POS, Admin home navigates to dashboard
   - _Requirements: 1.5, 8.3, 14.3_
 
@@ -694,7 +694,7 @@ Stack:
   - Show shortcut hints on hover
   - _Requirements: 4, 14.3_
 
-- [ ] 13.6 Low-stock banner integration
+- [x] 13.6 Low-stock banner integration
   - Mount `LowStockBanner` (built in 10.9) in shell layout; visible on every authenticated route
   - _Requirements: 3.6_
 
