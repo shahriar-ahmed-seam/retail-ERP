@@ -19,6 +19,7 @@
 // Validates: Requirement 1.5.
 
 import type { Api } from '@shared/ipc-contract';
+import type { MigrationProgressEvent } from '@shared/migration';
 
 declare global {
   interface Window {
@@ -28,6 +29,17 @@ declare global {
      * IPC channel; each returns a `Result<IpcResponse<C>>` envelope.
      */
     readonly api: Api;
+    /**
+     * Pre-auth bridge exposed by the preload script for the migration
+     * progress window only (Phase 16 task 16.7). The migration progress
+     * page subscribes to `setup:migrationProgress` events here without
+     * touching the authenticated `api` surface.
+     */
+    readonly setupApi: {
+      readonly onMigrationProgress: (
+        handler: (event: MigrationProgressEvent) => void,
+      ) => () => void;
+    };
   }
 }
 

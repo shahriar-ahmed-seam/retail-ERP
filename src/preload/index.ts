@@ -41,8 +41,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 import { IPC_CHANNELS } from '@shared/ipc-contract';
+import {
+  MIGRATION_PROGRESS_CHANNEL,
+  type MigrationProgressEvent,
+} from '@shared/migration';
 
 import type { Api, IpcChannel } from '@shared/ipc-contract';
+import type { IpcRendererEvent } from 'electron';
 
 /**
  * Build the typed `api` object by mapping every channel in
@@ -90,3 +95,40 @@ function buildApi(): Api {
 // this app does NOT use) it would become a global on the same context as
 // the page, defeating the isolation.
 contextBridge.exposeInMainWorld('api', buildApi());
+
+// ---------------------------------------------------------------------------
+// `setupApi` — pre-auth bridge for the migration progress window
+// ---------------------------------------------------------------------------
+//
+// The migration progress window (Phase 16 task 16.7) is shown BEFORE the
+// IPC router is bound and BEFORE any user has authenticated. It still
+// needs to receive progress events from the main-process bootstrap so
+// the spinner copy can advance from `Preparing database…` through
+// `Applying migration N of M…` to `Done` (or the recovery message on
+// error).
+//
+// The events flow over the dedicated unprivileged channel
+// `setup:migrationProgress` (Req 14.2, 14.9). We expose only the
+// listener side here — the renderer cannot post to this channel — and
+// return an unsubscribe callback so the React effect can clean up on
+// unmount. Using a closure-scoped wrapper hides the raw
+// `IpcRendererEvent` argument from renderer code; consumers see only
+// the typed `MigrationProgressEvent`.
+
+contextBridge.exposeInMainWorld('setupApi', {
+  /**
+   * Subscribe to migration progress events. Returns an unsubscribe
+   * function so the renderer can detach the listener on unmount.
+   */
+  onMigrationProgress(
+    handler: (event: MigrationProgressEvent) => void,
+  ): () => void {
+    const wrapped = (_e: IpcRendererEvent, payload: MigrationProgressEvent): void => {
+      handler(payload);
+    };
+    ipcRenderer.on(MIGRATION_PROGRESS_CHANNEL, wrapped);
+    return () => {
+      ipcRenderer.removeListener(MIGRATION_PROGRESS_CHANNEL, wrapped);
+    };
+  },
+});

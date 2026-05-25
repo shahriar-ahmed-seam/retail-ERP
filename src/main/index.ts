@@ -4,6 +4,11 @@ import { app, BrowserWindow, dialog, ipcMain } from 'electron';
 
 import { sessionStore } from '@main/auth/session-store.js';
 import { wireWindowSessionLifecycle } from '@main/auth/window-lifecycle.js';
+import {
+  ensureUserDb,
+  runMigrations,
+  type RunMigrationsResult,
+} from '@main/bootstrap/index.js';
 import { connect, disconnect } from '@main/db/index.js';
 import {
   registerAuditHandlers,
@@ -25,6 +30,10 @@ import { AuthService } from '@main/services/auth.service.js';
 import { BackupService } from '@main/services/backup.service.js';
 import { runIntegrityCheck } from '@main/services/integrity.js';
 import { startSchedulers, stopSchedulers } from '@main/services/scheduler.js';
+import {
+  MIGRATION_PROGRESS_CHANNEL,
+  type MigrationProgressEvent,
+} from '@shared/migration.js';
 
 /**
  * Electron main-process entry.
@@ -332,8 +341,223 @@ function createWindow(): void {
   }
 }
 
+// ---------------------------------------------------------------------------
+// First-run migration window (Phase 16, tasks 16.2 + 16.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Open a dedicated full-screen migration progress `BrowserWindow`
+ * loading the renderer bundle with `?migration=true`. The renderer
+ * entry detects the query string and mounts `<MigrationProgressPage />`
+ * directly, bypassing the auth provider, the router, and every
+ * feature module so no protected surface is reachable while
+ * migrations run (Req 14.9).
+ *
+ * Keeping the window construction here (rather than inside a helper
+ * module) is deliberate: the migration window is the only window the
+ * application opens before the IPC surface is bound. Reusing
+ * `createWindow()` would also wire the session-clearing hooks, which
+ * are pointless when no session can exist yet.
+ */
+function createMigrationProgressWindow(): BrowserWindow {
+  const win = new BrowserWindow({
+    width: 640,
+    height: 400,
+    show: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    title: 'Core Retail ERP — Updating database',
+    webPreferences: {
+      preload: join(__dirname, '../preload/index.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+
+  win.removeMenu();
+  win.on('ready-to-show', () => {
+    win.show();
+  });
+
+  const devServerUrl = process.env.ELECTRON_RENDERER_URL;
+  if (devServerUrl !== undefined && devServerUrl !== '') {
+    void win.loadURL(`${devServerUrl}?migration=true`);
+  } else {
+    void win.loadFile(join(__dirname, '../renderer/index.html'), {
+      query: { migration: 'true' },
+    });
+  }
+
+  return win;
+}
+
+/**
+ * Send a migration progress event to the open migration window.
+ * No-ops if the window has been destroyed (e.g. operator forced
+ * close mid-migration); the bootstrap logs the underlying error
+ * and continues to its terminal state.
+ */
+function sendMigrationProgress(
+  win: BrowserWindow,
+  event: MigrationProgressEvent,
+): void {
+  if (win.isDestroyed()) return;
+  win.webContents.send(MIGRATION_PROGRESS_CHANNEL, event);
+}
+
+/**
+ * Resolve the bundled DB template path. In a packaged Electron app
+ * `process.resourcesPath` points at the `resources/` directory under
+ * the installed application; in dev (`npm run dev`) it points at
+ * Electron's own resource directory, so we fall back to the repo
+ * root's `resources/shop.db.template`.
+ */
+function resolveTemplatePath(): string {
+  const packaged = join(process.resourcesPath ?? '', 'shop.db.template');
+  return packaged;
+}
+
+/**
+ * Run the first-run database flow inside the migration progress
+ * window. Returns `true` when migrations completed and the main
+ * bootstrap may proceed; `false` when the bootstrap should refuse
+ * to start (operator-visible error already shown in the migration
+ * window).
+ *
+ *   1. Resolve `<userData>` and the bundled template path.
+ *   2. Open the migration window.
+ *   3. Wait for `did-finish-load` so the renderer's
+ *      `setup:migrationProgress` listener is attached before any
+ *      events are emitted (otherwise the first `preparing` event
+ *      races the listener registration and is dropped).
+ *   4. `ensureUserDb` — copy the template if no DB exists.
+ *   5. `runMigrations` — `prisma migrate deploy` against the
+ *      user-data DB, piping progress to the window.
+ *   6. On success: emit `done`, brief settle delay, destroy the
+ *      window, and return true.
+ *   7. On failure: emit `error`, leave the window open showing the
+ *      recovery prompt copy, and return false.
+ *
+ * The `DATABASE_URL` env is set to `file:<userData>/shop.db` for
+ * the lifetime of the process so the singleton Prisma client
+ * (constructed in `bootstrapMain` via `connect()`) opens the
+ * user-data DB rather than `prisma/dev.db`.
+ *
+ * Validates: Requirements 14.1, 14.2, 14.8, 14.9.
+ */
+async function runFirstRunBootstrap(): Promise<boolean> {
+  const userDataDir = app.getPath('userData');
+  const templatePath = resolveTemplatePath();
+  const repoCwd = app.getAppPath();
+
+  let dbPath: string;
+  try {
+    const ensured = ensureUserDb({ userDataDir, templatePath });
+    dbPath = ensured.dbPath;
+    if (ensured.copied) {
+      console.warn(
+        `[bootstrap] copied bundled template to ${dbPath} (first run)`,
+      );
+    }
+  } catch (err) {
+    console.error('[bootstrap] ensureUserDb failed', err);
+    // No window to surface this in yet — fail hard.
+    await dialog.showMessageBox({
+      type: 'error',
+      title: 'Core Retail ERP — Failed to start',
+      message: 'Could not prepare the database file.',
+      detail: err instanceof Error ? err.message : String(err),
+      buttons: ['Quit'],
+    });
+    return false;
+  }
+
+  // Point Prisma at the user-data DB. The singleton constructed by
+  // `@main/db/prisma.ts` reads `DATABASE_URL` at client-construction
+  // time; setting it before `bootstrapMain()` is what makes the
+  // application talk to the user's data file rather than the
+  // committed `prisma/dev.db`.
+  const databaseUrl = `file:${dbPath.replace(/\\/g, '/')}`;
+  process.env.DATABASE_URL = databaseUrl;
+
+  const win = createMigrationProgressWindow();
+
+  // Wait for the renderer to attach its progress listener before
+  // we emit any events. `did-finish-load` fires after the page's
+  // `useEffect` registrations have run.
+  await new Promise<void>((resolve) => {
+    if (win.webContents.isLoading()) {
+      win.webContents.once('did-finish-load', () => {
+        resolve();
+      });
+    } else {
+      resolve();
+    }
+  });
+
+  let migrationResult: RunMigrationsResult;
+  try {
+    migrationResult = await runMigrations({
+      databaseUrl,
+      cwd: repoCwd,
+      onProgress: (event) => {
+        sendMigrationProgress(win, event);
+      },
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[bootstrap] migration runner threw', err);
+    sendMigrationProgress(win, { phase: 'error', message });
+    return false;
+  }
+
+  if (migrationResult.exitCode !== 0) {
+    const message =
+      migrationResult.stderr.trim().length > 0
+        ? migrationResult.stderr.trim()
+        : `prisma migrate deploy exited with status ${migrationResult.exitCode}`;
+    console.error(`[bootstrap] migration failed: ${message}`);
+    sendMigrationProgress(win, { phase: 'error', message });
+    return false;
+  }
+
+  sendMigrationProgress(win, { phase: 'done' });
+
+  // Brief settle so the operator sees the `Done` copy. 250 ms is
+  // short enough not to annoy and long enough to read on a fresh
+  // install.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 250);
+  });
+
+  if (!win.isDestroyed()) {
+    win.destroy();
+  }
+  return true;
+}
+
 void app.whenReady().then(async () => {
+  // Phase 16, tasks 16.2 + 16.7 — first-run database bootstrap.
+  // The migration progress `BrowserWindow` is the ONLY window the
+  // user can see while migrations run; the main application window
+  // is gated behind a clean migration result.
+  const migrationOk = await runFirstRunBootstrap();
+  if (!migrationOk) {
+    // The migration window stays open showing the error copy; the
+    // user can read the message and quit. We do NOT continue to the
+    // main bootstrap because Prisma must not be opened against an
+    // out-of-date schema (Req 14.9).
+    return;
+  }
+
   await bootstrapMain();
+  // If `bootstrapMain` invoked `app.quit()` via the integrity-check
+  // recovery flow, Electron is already shutting down; `createWindow`
+  // is still safe to call (the existing pre-Phase-16 behaviour) but
+  // any window it opens will be torn down immediately.
   createWindow();
 
   app.on('activate', () => {

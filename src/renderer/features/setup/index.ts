@@ -7,3 +7,9 @@
  */
 
 export { SetupPage } from './SetupPage.js';
+export {
+  MigrationProgressPage,
+  progressTextFor,
+  type MigrationProgressPageProps,
+  type MigrationProgressSubscriber,
+} from './MigrationProgressPage.js';
