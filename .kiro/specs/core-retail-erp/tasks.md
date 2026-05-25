@@ -571,12 +571,12 @@ Stack:
 
 ### Phase 11 — Backup and journal
 
-- [ ] 11.1 BackupService — VACUUM INTO snapshots
+- [x] 11.1 BackupService — VACUUM INTO snapshots
   - Implement `backup.service.ts` `takeSnapshot()` that runs `VACUUM INTO '<userData>/backups/shop-YYYY-MM-DD.db'` against the live DB
   - Updates `Setting 'backup.lastSnapshot'` with ISO timestamp
   - _Requirements: 10.1, 10.2_
 
-- [ ] 11.2 Scheduler (on-launch + 30-min interval) and manual trigger
+- [x] 11.2 Scheduler (on-launch + 30-min interval) and manual trigger
   - On app start, if today has no snapshot, take one
   - `setInterval(30 minutes)` re-checks the daily-snapshot condition
   - Wire `backup:now` (Admin only)
@@ -584,12 +584,12 @@ Stack:
   - Document the maintenance window UI surface in settings (a read-only display of the active cron, last run, and next scheduled run; full edit moves to a future revision)
   - _Requirements: 10.1, 10.2, 16.10_
 
-- [ ] 11.2.1 WAL checkpoint fallback timer
+- [x] 11.2.1 WAL checkpoint fallback timer
   - In addition to `wal_autocheckpoint=1000` set in task 1.3, register a `setInterval(60 minutes)` in the main process that runs `PRAGMA wal_checkpoint(PASSIVE)` so the WAL file is checkpointed at least once per hour even under low write volume
   - Cleared on app quit; no-op if the DB connection is closed
   - _Requirements: 16.11_
 
-- [ ] 11.3 Retention enforcement
+- [x] 11.3 Retention enforcement
   - After every snapshot, keep the N most recent files (read N from `Setting 'backup.retentionDays'`, default 14); delete older
   - _Requirements: 10.3_
 

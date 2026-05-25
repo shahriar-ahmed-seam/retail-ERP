@@ -15,6 +15,24 @@ export {
   type CreateInitialAdminResult,
 } from './auth.service.js';
 
+export {
+  BackupService,
+  BACKUPS_SUBDIR,
+  DEFAULT_RETENTION_DAYS,
+  SETTING_LAST_SNAPSHOT,
+  SETTING_RETENTION_DAYS,
+  enforceRetention,
+  formatSnapshotDate,
+  lastSnapshot,
+  snapshotFileName,
+  takeSnapshot,
+  weeklyMaintenance,
+  type BackupOptions,
+  type EnforceRetentionResult,
+  type TakeSnapshotResult,
+  type WeeklyMaintenanceResult,
+} from './backup.service.js';
+
 export { CategoryService } from './category.service.js';
 
 export { CustomerService } from './customer.service.js';
@@ -55,3 +73,16 @@ export {
 } from './report/index.js';
 
 export { SupplierService } from './supplier.service.js';
+
+export {
+  DEFAULT_MAINTENANCE_CRON,
+  DAILY_RECHECK_INTERVAL_MS,
+  WAL_CHECKPOINT_INTERVAL_MS,
+  SETTING_MAINTENANCE_CRON,
+  getMaintenanceStatus,
+  nextCronTick,
+  startSchedulers,
+  stopSchedulers,
+  type MaintenanceStatus,
+  type SchedulerDeps,
+} from './scheduler.js';

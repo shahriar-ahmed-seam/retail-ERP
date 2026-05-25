@@ -7,6 +7,7 @@ import { wireWindowSessionLifecycle } from '@main/auth/window-lifecycle.js';
 import { connect, disconnect } from '@main/db/index.js';
 import {
   registerAuthHandlers,
+  registerBackupHandlers,
   registerCategoriesHandlers,
   registerCustomersHandlers,
   registerInventoryHandlers,
@@ -18,6 +19,7 @@ import {
   registerSuppliersHandlers,
 } from '@main/ipc/handlers/index.js';
 import { bindIpcHandlers } from '@main/ipc/index.js';
+import { startSchedulers, stopSchedulers } from '@main/services/scheduler.js';
 
 /**
  * Electron main-process entry.
@@ -67,8 +69,15 @@ async function bootstrapMain(): Promise<void> {
   registerPurchasesHandlers();
   registerPosHandlers();
   registerSettingsHandlers();
+  registerBackupHandlers();
   // Future handler groups (pos:finalize in task 7.4, …) plug in here.
   bindIpcHandlers(ipcMain);
+
+  // Phase 11 tasks 11.2 + 11.2.1 — start the daily-snapshot recheck
+  // interval, the 60-min WAL checkpoint fallback, and the weekly
+  // VACUUM/ANALYZE cron after the IPC surface is fully bound. The
+  // schedulers are stopped on `before-quit` below.
+  startSchedulers();
 }
 
 function createWindow(): void {
@@ -129,6 +138,11 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // Phase 11, tasks 11.2 + 11.2.1 — clear every registered scheduler
+  // handle (daily-snapshot recheck, WAL checkpoint, weekly cron) so
+  // a late tick after `disconnect()` cannot surface as an unhandled
+  // rejection on a closed Prisma connection.
+  stopSchedulers();
   sessionStore.clearAll();
   // Best-effort; rejection here would only delay quit and there is no
   // useful recovery surface during shutdown.
