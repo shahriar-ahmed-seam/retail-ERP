@@ -601,20 +601,20 @@ Stack:
   - Add a lint rule (custom ESLint rule or grep-based check in CI) that fails the build on any reference to `prisma.journalEntry.update`, `prisma.journalEntry.delete`, `prisma.auditLog.update`, or `prisma.auditLog.delete` within `src/`
   - _Requirements: 10.5, 13.4_
 
-- [ ] 11.6 Recovery flow — integrity check, restore, replay
+- [x] 11.6 Recovery flow — integrity check, restore, replay
   - On startup, run `PRAGMA integrity_check`
   - On non-`ok`, show the recovery prompt (Admin auth required)
   - On accept: copy latest `backups/shop-*.db` over `shop.db`, reopen, then drive a batched journal replay using the cursor walk shape from design — 1000-row batches via `paginateCursor` against `journal_entries` ordered ASC on `(timestamp, id)`, each batch executed in one `$transaction`, with idempotent `upsert` keyed on the deterministic `referenceId` so partial replays are safe to resume
   - On cancel: refuse to start
   - _Requirements: 10.6, 11.3, 16.8_
 
-- [ ] 11.6.1 `replayJournal()` helper
+- [x] 11.6.1 `replayJournal()` helper
   - Implement `src/main/services/backup/replay.ts` exposing `replayJournal(snapshotTs: Date)` that loops `paginateCursor` (ascending direction) over `journal_entries WHERE timestamp >= snapshotTs`, applying each batch in a single `$transaction` and dispatching to per-opType replay handlers (`sale`, `purchase`, `adjustment`, `price.change`, `role.change`)
   - Each handler uses Prisma `upsert` on the deterministic primary key carried in the journal payload so re-running the same entry is a no-op
   - Crash-safety: killing the process mid-replay leaves at most one in-flight 1000-row batch un-applied; on the next launch the same cursor walk resumes from the last committed batch
   - _Requirements: 10.6, 11.3, 16.8_
 
-- [ ] 11.7 Backup UI panel in settings
+- [x] 11.7 Backup UI panel in settings
   - `src/renderer/features/backup/BackupPage.tsx`: list snapshots with timestamps, "Backup now" button, "Restore" button per snapshot (Admin only, with confirmation)
   - _Requirements: 10.1, 10.2_
 
@@ -635,7 +635,7 @@ Stack:
   - Inject a thrown error at every transactional step inside `finalizeSale`, `purchase.create`, and `inventory.adjust`; after restart, assert either all expected rows are present or none are; for at least one scenario, simulate a hard kill mid-tx (using a Prisma middleware that calls `process.kill(process.pid, 'SIGKILL')` in a child process) and assert the same outcome on relaunch
   - **Kill-mid-replay convergence leg:** drive a backup → corruption → recovery flow against a random op sequence; partway through the batched journal replay (task 11.6 / 11.6.1), `SIGKILL` the process at a random batch boundary; on next launch, assert the replay resumes from the last committed cursor and the final DB state is observationally equivalent to the same op sequence replayed without interruption (same row counts and contents across `Sale`, `SaleItem`, `Payment`, `Inventory`, `InventoryMovement`, `JournalEntry`, `AuditLog`)
 
-- [ ] 11.11 Checkpoint — backup + journal green
+- [x] 11.11 Checkpoint — backup + journal green
   - Snapshots schedule, retain, and restore correctly; recovery replay reproduces state
   - Ensure all tests pass, ask the user if questions arise.
 

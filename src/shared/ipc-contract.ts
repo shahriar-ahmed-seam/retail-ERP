@@ -396,7 +396,18 @@ export interface IpcContract {
   };
   'backup:restore': {
     req: { path: string };
-    res: void;
+    res: { replayed: { batchCount: number; appliedCount: number } };
+  };
+  'backup:list': {
+    req: void;
+    res: {
+      rows: readonly {
+        readonly filename: string;
+        readonly path: string;
+        readonly takenAt: string;
+        readonly sizeBytes: number;
+      }[];
+    };
   };
 
   // ----- Users & roles (Admin only) ---------------------------------------
@@ -544,6 +555,7 @@ export const IPC_CHANNELS = [
   // Backup
   'backup:now',
   'backup:restore',
+  'backup:list',
 
   // Users & roles
   'users:list',

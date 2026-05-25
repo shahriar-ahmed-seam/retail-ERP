@@ -171,6 +171,7 @@ export const RBAC: Readonly<Record<keyof IpcContract, readonly SessionRole[]>> =
   // ----- Backup -----------------------------------------------------------
   'backup:now': ADMIN_ONLY,
   'backup:restore': ADMIN_ONLY,
+  'backup:list': ADMIN_ONLY,
 
   // ----- Users & roles (Admin only) ---------------------------------------
   'users:list': ADMIN_ONLY,

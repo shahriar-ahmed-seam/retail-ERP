@@ -473,12 +473,56 @@ describe('BackupService.weeklyMaintenance', () => {
 // ---------------------------------------------------------------------------
 
 describe('BackupService surface', () => {
-  it('is frozen and exposes the four documented methods', () => {
+  it('is frozen and exposes every documented method', () => {
     expect(Object.isFrozen(BackupService)).toBe(true);
     expect(typeof BackupService.takeSnapshot).toBe('function');
     expect(typeof BackupService.enforceRetention).toBe('function');
     expect(typeof BackupService.lastSnapshot).toBe('function');
     expect(typeof BackupService.weeklyMaintenance).toBe('function');
+    expect(typeof BackupService.listSnapshots).toBe('function');
+    expect(typeof BackupService.restoreSnapshot).toBe('function');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// listSnapshots
+// ---------------------------------------------------------------------------
+
+describe('BackupService.listSnapshots', () => {
+  it('returns Ok({ rows: [] }) when the backups directory does not exist', async () => {
+    const result = unwrapOk(await BackupService.listSnapshots({ userDataDir }));
+    expect(result.rows).toEqual([]);
+  });
+
+  it('returns rows sorted DESC by mtime with filename, path, takenAt, sizeBytes', async () => {
+    createSnapshotFile('shop-2024-04-01.db', 5 * 3600);
+    createSnapshotFile('shop-2024-04-02.db', 3 * 3600);
+    createSnapshotFile('shop-2024-04-03.db', 1 * 3600);
+
+    const result = unwrapOk(await BackupService.listSnapshots({ userDataDir }));
+    expect(result.rows).toHaveLength(3);
+    // Newest first.
+    expect(result.rows[0]!.filename).toBe('shop-2024-04-03.db');
+    expect(result.rows[1]!.filename).toBe('shop-2024-04-02.db');
+    expect(result.rows[2]!.filename).toBe('shop-2024-04-01.db');
+
+    for (const row of result.rows) {
+      expect(row.path).toContain(row.filename);
+      expect(typeof row.takenAt).toBe('string');
+      expect(new Date(row.takenAt).toString()).not.toBe('Invalid Date');
+      expect(row.sizeBytes).toBeGreaterThan(0);
+    }
+  });
+
+  it('ignores files that do not match shop-YYYY-MM-DD.db', async () => {
+    createSnapshotFile('shop-2024-04-01.db', 1000);
+    mkdirSync(backupsDir(), { recursive: true });
+    writeFileSync(join(backupsDir(), 'README.txt'), 'ignored');
+    writeFileSync(join(backupsDir(), 'shop-bad-name.db'), 'ignored');
+
+    const result = unwrapOk(await BackupService.listSnapshots({ userDataDir }));
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0]!.filename).toBe('shop-2024-04-01.db');
   });
 });
 

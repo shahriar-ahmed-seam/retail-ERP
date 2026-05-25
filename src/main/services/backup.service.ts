@@ -92,10 +92,11 @@
 // Validates: Requirements 10.1, 10.2, 10.3, 16.10.
 
 import { existsSync } from 'node:fs';
-import { mkdir, readdir, rm, stat } from 'node:fs/promises';
+import { copyFile, mkdir, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { prisma as defaultPrisma } from '@main/db/prisma.js';
+import { prisma as defaultPrisma, connect, disconnect } from '@main/db/prisma.js';
+import { replayJournal, type ReplayJournalResult } from '@main/services/backup/replay.js';
 import { Err, Ok, type Result } from '@shared/result.js';
 
 import type { PrismaClient } from '@prisma/client';
@@ -163,6 +164,30 @@ export interface WeeklyMaintenanceResult {
   readonly vacuumMs: number;
   /** Wall-clock duration of the `ANALYZE` statement, in milliseconds. */
   readonly analyzeMs: number;
+}
+
+/** One row returned by `listSnapshots`. */
+export interface SnapshotRow {
+  /** File name without the directory portion (e.g. `shop-2024-05-01.db`). */
+  readonly filename: string;
+  /** Absolute path on disk. */
+  readonly path: string;
+  /** ISO 8601 mtime of the file. */
+  readonly takenAt: string;
+  /** Size of the snapshot file in bytes. */
+  readonly sizeBytes: number;
+}
+
+/** Successful return shape of `listSnapshots`. */
+export interface ListSnapshotsResult {
+  /** Snapshots sorted DESC by mtime (newest first). */
+  readonly rows: readonly SnapshotRow[];
+}
+
+/** Successful return shape of `restoreSnapshot`. */
+export interface RestoreSnapshotResult {
+  /** Telemetry from the post-restore journal replay. */
+  readonly replayed: ReplayJournalResult;
 }
 
 // ---------------------------------------------------------------------------
@@ -562,6 +587,202 @@ export async function weeklyMaintenance(): Promise<Result<WeeklyMaintenanceResul
 }
 
 // ---------------------------------------------------------------------------
+// listSnapshots
+// ---------------------------------------------------------------------------
+
+/**
+ * Enumerate every `shop-YYYY-MM-DD.db` file under
+ * `<userDataDir>/backups/` and surface each entry's path, mtime
+ * and size. Sorted newest-first.
+ *
+ * Drives the backup UI panel (Phase 11 task 11.7) — the renderer
+ * lists snapshots so the operator can pick one to restore. The
+ * helper does not touch the database; it is a pure file-system
+ * read with the same `userDataDir` injection seam as
+ * `takeSnapshot` / `enforceRetention`.
+ *
+ * Returns `Ok({ rows: [] })` when the backups directory does not
+ * exist (fresh install). Errors map to `Err('INTERNAL', ...)` so
+ * the renderer surfaces a clear failure rather than a rejected
+ * promise.
+ *
+ * Validates: Requirements 10.1, 10.2.
+ */
+export async function listSnapshots(
+  opts?: BackupOptions,
+): Promise<Result<ListSnapshotsResult>> {
+  try {
+    const userDataDir = await resolveUserDataDir(opts);
+    const backupsDir = join(userDataDir, BACKUPS_SUBDIR);
+
+    const stats = await listSnapshotsByMtime(backupsDir);
+    const rows: SnapshotRow[] = await Promise.all(
+      stats.map(async (entry) => {
+        const st = await stat(entry.path);
+        return {
+          filename: entry.name,
+          path: entry.path,
+          takenAt: new Date(st.mtimeMs).toISOString(),
+          sizeBytes: st.size,
+        };
+      }),
+    );
+
+    return Ok({ rows });
+  } catch (err) {
+    return Err('INTERNAL', {
+      reason: 'list_snapshots_failed',
+      cause: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// restoreSnapshot
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate the requested path lies inside the backups directory.
+ * Defence-in-depth: the backup UI only ever passes paths it pulled
+ * from `listSnapshots`, but we re-check here so a misuse cannot
+ * copy an arbitrary file over the live shop.db.
+ */
+function isPathInside(parent: string, candidate: string): boolean {
+  const normalize = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/u, '');
+  const parentNormalized = normalize(parent);
+  const candidateNormalized = normalize(candidate);
+  return (
+    candidateNormalized === parentNormalized ||
+    candidateNormalized.startsWith(`${parentNormalized}/`)
+  );
+}
+
+/**
+ * Production helper that resolves the live `shop.db` file path
+ * from the `userDataDir`. The first-run bootstrap (Phase 16
+ * task 16.2) places the database at `<userData>/shop.db`; this
+ * helper mirrors that path so `restoreSnapshot` can copy a
+ * snapshot over it.
+ */
+function resolveLiveDbPath(userDataDir: string): string {
+  return join(userDataDir, 'shop.db');
+}
+
+/**
+ * Restore a snapshot file over the live shop.db and replay the
+ * journal forward from the snapshot's `takenAt` timestamp.
+ *
+ * Steps:
+ *
+ *   1. Validate the requested path exists and lives inside the
+ *      backups directory under `userDataDir`. Reject with
+ *      `Err('VALIDATION', { field: 'path' })` otherwise.
+ *
+ *   2. Read `Setting('backup.lastSnapshot')` BEFORE we disconnect.
+ *      That row carries the ISO timestamp of the most-recent
+ *      snapshot — used as the `snapshotTs` lower bound for
+ *      `replayJournal`. Falling back to the snapshot file's mtime
+ *      if the setting is missing keeps the recovery flow robust
+ *      against legacy databases that never wrote the row.
+ *
+ *   3. `prisma.$disconnect()` so the file handle is released
+ *      before the copy. On Windows an open handle prevents
+ *      `copyFile` from succeeding.
+ *
+ *   4. `fs.copyFile(snapshotPath, livePath)` overwrites the live
+ *      database. The snapshot file is itself a consistent SQLite
+ *      database (produced by `VACUUM INTO`).
+ *
+ *   5. `prisma.$connect()` to reopen against the freshly-restored
+ *      file (and re-apply PRAGMAs).
+ *
+ *   6. `replayJournal({ snapshotTs })` walks the post-snapshot
+ *      journal entries in 1,000-row batches and re-applies them
+ *      idempotently.
+ *
+ * Returns `Ok({ replayed })` carrying the replay telemetry. Any
+ * step failure surfaces as `Err('INTERNAL', ...)` so the recovery
+ * prompt can show the operator a structured error.
+ *
+ * Validates: Requirements 10.6, 11.3, 16.8.
+ */
+export async function restoreSnapshot(opts: {
+  readonly path: string;
+  readonly userDataDir?: string;
+}): Promise<Result<RestoreSnapshotResult>> {
+  try {
+    if (typeof opts.path !== 'string' || opts.path.length === 0) {
+      return Err('VALIDATION', { field: 'path' });
+    }
+
+    const userDataDir = await resolveUserDataDir(
+      opts.userDataDir !== undefined ? { userDataDir: opts.userDataDir } : undefined,
+    );
+    const backupsDir = join(userDataDir, BACKUPS_SUBDIR);
+    const livePath = resolveLiveDbPath(userDataDir);
+
+    if (!isPathInside(backupsDir, opts.path)) {
+      return Err('VALIDATION', { field: 'path', reason: 'not_in_backups_dir' });
+    }
+
+    if (!existsSync(opts.path)) {
+      return Err('VALIDATION', { field: 'path', reason: 'snapshot_not_found' });
+    }
+
+    // Step 2 — capture the snapshot timestamp BEFORE we disconnect.
+    // We read directly from the active client (the bootstrap calls
+    // this helper while the live connection is still open).
+    const snapshotTs = await readSnapshotTimestamp(opts.path);
+
+    // Steps 3, 4, 5 — disconnect, copy, reconnect.
+    await disconnect();
+    await copyFile(opts.path, livePath);
+    await connect();
+
+    // Step 6 — drive the journal replay forward from the snapshot
+    // timestamp. The replay helper paginates in 1,000-row batches;
+    // each batch is one `$transaction`, so a kill mid-replay leaves
+    // at most one un-applied batch and the next launch resumes
+    // from the last committed cursor (Property 12).
+    const replayResult = await replayJournal({ snapshotTs });
+    if (!replayResult.ok) {
+      return replayResult;
+    }
+
+    return Ok({ replayed: replayResult.value });
+  } catch (err) {
+    return Err('INTERNAL', {
+      reason: 'restore_failed',
+      cause: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Read the snapshot's effective timestamp. Order of preference:
+ *
+ *   1. `Setting('backup.lastSnapshot')` — the ISO timestamp the
+ *      original `takeSnapshot` call wrote. This is the canonical
+ *      cut-point: every journal entry committed AFTER this
+ *      timestamp is post-snapshot work that needs replaying.
+ *
+ *   2. The snapshot file's mtime — fallback for legacy databases
+ *      that never wrote the setting row.
+ *
+ * Returns a `Date` so the replay helper can stream it directly
+ * into the `>= snapshotTs` predicate.
+ */
+async function readSnapshotTimestamp(snapshotPath: string): Promise<Date> {
+  const last = await lastSnapshot();
+  if (last.ok && last.value.at !== null) {
+    const parsed = new Date(last.value.at);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  const st = await stat(snapshotPath);
+  return new Date(st.mtimeMs);
+}
+
+// ---------------------------------------------------------------------------
 // Public surface
 // ---------------------------------------------------------------------------
 
@@ -577,8 +798,9 @@ export const BackupService = Object.freeze({
   enforceRetention,
   lastSnapshot,
   weeklyMaintenance,
+  listSnapshots,
+  restoreSnapshot,
 } as const);
-
 /**
  * Re-export the lazy resolver so the unit tests for `scheduler.ts`
  * (task 11.2 / 11.2.1) can monkey-patch the cached value if needed.

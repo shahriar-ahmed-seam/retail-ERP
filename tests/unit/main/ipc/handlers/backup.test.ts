@@ -1,18 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
- * Unit tests for the backup IPC handler group (Phase 11, task 11.2
- * wiring of `backup:now` plus the stub for `backup:restore`).
+ * Unit tests for the backup IPC handler group.
  *
  * Drives each channel through `invokeHandlerForTest` so the assertions
  * cover the full middleware chain (auth + RBAC + handler), not just
  * the handler body.
  *
- * Both backup channels are ADMIN_ONLY per the static matrix —
+ * All three backup channels are ADMIN_ONLY per the static matrix —
  * cashiers see `Err('FORBIDDEN')` from the router and an `rbac.deny`
  * audit row is written before the handler runs (Req 8.4).
  *
- * Validates: Requirements 8.2, 8.4, 10.1, 10.2.
+ * Validates: Requirements 8.2, 8.4, 10.1, 10.2, 10.6, 11.3, 16.8.
  */
 
 // ---------------------------------------------------------------------------
@@ -21,6 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const backupMock = vi.hoisted(() => ({
   takeSnapshot: vi.fn(),
+  listSnapshots: vi.fn(),
+  restoreSnapshot: vi.fn(),
 }));
 
 vi.mock('@main/services/backup.service', () => ({
@@ -88,6 +89,8 @@ beforeEach(() => {
   recorder = new RecordingAuditWriter();
   setAuditWriter(recorder);
   backupMock.takeSnapshot.mockReset();
+  backupMock.listSnapshots.mockReset();
+  backupMock.restoreSnapshot.mockReset();
   registerBackupHandlers();
 });
 
@@ -103,8 +106,9 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('registerBackupHandlers', () => {
-  it('registers backup:now and backup:restore', () => {
+  it('registers backup:now, backup:list, and backup:restore', () => {
     expect(hasHandler('backup:now')).toBe(true);
+    expect(hasHandler('backup:list')).toBe(true);
     expect(hasHandler('backup:restore')).toBe(true);
   });
 
@@ -113,6 +117,8 @@ describe('registerBackupHandlers', () => {
       registerBackupHandlers();
     }).not.toThrow();
     expect(hasHandler('backup:now')).toBe(true);
+    expect(hasHandler('backup:list')).toBe(true);
+    expect(hasHandler('backup:restore')).toBe(true);
   });
 });
 
@@ -123,6 +129,7 @@ describe('registerBackupHandlers', () => {
 describe('backup:* require an authenticated session', () => {
   it.each([
     ['backup:now' as const, undefined],
+    ['backup:list' as const, undefined],
     ['backup:restore' as const, { path: '/some/path' }],
   ])('%s returns UNAUTHENTICATED with no session', async (channel, payload) => {
     const result = await invokeHandlerForTest(channel, ADMIN_SENDER, payload as never);
@@ -131,6 +138,8 @@ describe('backup:* require an authenticated session', () => {
       expect(result.error.code).toBe('UNAUTHENTICATED');
     }
     expect(backupMock.takeSnapshot).not.toHaveBeenCalled();
+    expect(backupMock.listSnapshots).not.toHaveBeenCalled();
+    expect(backupMock.restoreSnapshot).not.toHaveBeenCalled();
   });
 });
 
@@ -192,23 +201,93 @@ describe('backup:now handler', () => {
 });
 
 // ---------------------------------------------------------------------------
-// backup:restore — stub
+// backup:list
 // ---------------------------------------------------------------------------
 
-describe('backup:restore handler (stub)', () => {
-  it('Admin call returns Err(INTERNAL, { reason: "NOT_IMPLEMENTED" })', async () => {
+describe('backup:list handler', () => {
+  it('Admin can call it and receives the snapshot rows', async () => {
+    const rows = [
+      {
+        filename: 'shop-2024-05-01.db',
+        path: '/tmp/userData/backups/shop-2024-05-01.db',
+        takenAt: '2024-05-01T10:00:00.000Z',
+        sizeBytes: 1024,
+      },
+    ];
+    backupMock.listSnapshots.mockResolvedValue(Ok({ rows }));
     bindAdmin();
-    const result = await invokeHandlerForTest('backup:restore', ADMIN_SENDER, {
-      path: '/some/path',
-    });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe('INTERNAL');
-      expect(result.error.details).toEqual({ reason: 'NOT_IMPLEMENTED' });
+
+    const result = await invokeHandlerForTest('backup:list', ADMIN_SENDER, undefined);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.rows).toEqual(rows);
     }
   });
 
-  it('Cashier is denied with FORBIDDEN before the stub runs', async () => {
+  it('forwards the service Err envelope unchanged', async () => {
+    backupMock.listSnapshots.mockResolvedValue(
+      Err('INTERNAL', { reason: 'list_snapshots_failed' }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('backup:list', ADMIN_SENDER, undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('INTERNAL');
+    }
+  });
+
+  it('Cashier is denied with FORBIDDEN', async () => {
+    bindCashier();
+    const result = await invokeHandlerForTest('backup:list', CASHIER_SENDER, undefined);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('FORBIDDEN');
+    }
+    expect(backupMock.listSnapshots).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// backup:restore
+// ---------------------------------------------------------------------------
+
+describe('backup:restore handler', () => {
+  it('Admin call drives the restore + replay flow and returns telemetry', async () => {
+    backupMock.restoreSnapshot.mockResolvedValue(
+      Ok({ replayed: { batchCount: 2, appliedCount: 17 } }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('backup:restore', ADMIN_SENDER, {
+      path: '/tmp/userData/backups/shop-2024-05-01.db',
+    });
+    expect(backupMock.restoreSnapshot).toHaveBeenCalledWith({
+      path: '/tmp/userData/backups/shop-2024-05-01.db',
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.replayed.batchCount).toBe(2);
+      expect(result.value.replayed.appliedCount).toBe(17);
+    }
+  });
+
+  it('forwards the service Err envelope unchanged', async () => {
+    backupMock.restoreSnapshot.mockResolvedValue(
+      Err('VALIDATION', { field: 'path', reason: 'snapshot_not_found' }),
+    );
+    bindAdmin();
+
+    const result = await invokeHandlerForTest('backup:restore', ADMIN_SENDER, {
+      path: '/missing.db',
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe('VALIDATION');
+    }
+  });
+
+  it('Cashier is denied with FORBIDDEN before the handler runs', async () => {
     bindCashier();
     const result = await invokeHandlerForTest('backup:restore', CASHIER_SENDER, {
       path: '/some/path',
@@ -218,6 +297,7 @@ describe('backup:restore handler (stub)', () => {
       expect(result.error.code).toBe('FORBIDDEN');
       expect(result.error.details).toEqual({ channel: 'backup:restore' });
     }
+    expect(backupMock.restoreSnapshot).not.toHaveBeenCalled();
     const denyRow = recorder.rows.find(
       (r) => r.actionType === 'rbac.deny' && r.entityId === 'backup:restore',
     );

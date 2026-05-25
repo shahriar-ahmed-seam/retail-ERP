@@ -180,6 +180,7 @@ const CASHIER_DENY: readonly IpcChannel[] = [
   // Backups (Req 10, 8.2).
   'backup:now',
   'backup:restore',
+  'backup:list',
   // User/role admin (Req 8.2, 8.5).
   'users:list',
   'users:upsert',

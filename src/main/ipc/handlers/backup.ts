@@ -1,14 +1,14 @@
 // src/main/ipc/handlers/backup.ts
 //
-// IPC handlers for the backup channel group (Phase 11, task 11.2 wiring).
+// IPC handlers for the backup channel group.
 //
-// Wires two channels into the router via the exported
+// Wires three channels into the router via the exported
 // `registerBackupHandlers()` function. The bootstrap in
 // `src/main/index.ts` calls this alongside the other
 // `register*Handlers()` entries so the router is fully populated
 // before Electron exposes the IPC surface to renderers.
 //
-// Channels (both Admin-only per the static RBAC matrix —
+// Channels (all Admin-only per the static RBAC matrix —
 // `src/main/permission/matrix.ts`):
 //
 //   - `backup:now`     Forwards directly to
@@ -20,24 +20,24 @@
 //                      `app.getPath('userData')` (see
 //                      `backup.service.ts > resolveUserDataDir`).
 //
-//   - `backup:restore` Stub returning `Err('INTERNAL', { reason:
-//                      'NOT_IMPLEMENTED' })`. The full restore +
-//                      replay flow lives in tasks 11.6 + 11.6.1 and
-//                      is intentionally out of scope for this batch.
-//                      Wiring the channel as a stub here — rather
-//                      than leaving it unregistered — means the
-//                      Electron binding loop attaches it to
-//                      `ipcMain.handle` and the renderer sees a
-//                      well-formed `Err(...)` envelope instead of
-//                      an `IPC channel "backup:restore" not
-//                      registered` error if the future UI calls it
-//                      prematurely.
+//   - `backup:list`    Enumerates every `shop-YYYY-MM-DD.db` file
+//                      under `<userData>/backups/` so the backup UI
+//                      panel can render the snapshot list (Phase 11
+//                      task 11.7). Returns rows sorted newest-first.
 //
-// Validates: Requirements 8.2, 8.4, 10.1, 10.2.
+//   - `backup:restore` Validates the requested path, drives the
+//                      restore + journal replay flow via
+//                      `BackupService.restoreSnapshot`, and returns
+//                      the replay telemetry (`{ batchCount,
+//                      appliedCount }`) so the UI can show the
+//                      operator how many post-snapshot events were
+//                      re-applied.
+//
+// Validates: Requirements 8.2, 8.4, 10.1, 10.2, 10.6, 11.3, 16.8.
 
 import { registerHandler, type HandlerFn } from '@main/ipc/router.js';
 import { BackupService } from '@main/services/backup.service.js';
-import { Err } from '@shared/result.js';
+import { Ok } from '@shared/result.js';
 
 // ---------------------------------------------------------------------------
 // Handlers
@@ -59,23 +59,33 @@ const nowHandler: HandlerFn<'backup:now'> = async () => {
 };
 
 /**
- * `backup:restore` handler — stub.
- *
- * The full restore + journal replay flow is the responsibility of
- * Phase 11 tasks 11.6 + 11.6.1. Until those land we return a
- * structured `INTERNAL` envelope with `reason: 'NOT_IMPLEMENTED'` so
- * any premature renderer call surfaces a clear "feature not yet
- * available" message rather than an opaque failure.
- *
- * The handler is registered (rather than left unbound) so:
- *   - the Electron binding loop attaches it to `ipcMain.handle`,
- *   - the static IPC contract type stays satisfied by the router,
- *   - the `rbac.deny` audit row fires for cashiers attempting to
- *     trigger a restore (the matrix already pins the channel to
- *     Admin-only).
+ * `backup:list` handler. Admin-only by RBAC. Reads the backups
+ * directory and surfaces every `shop-YYYY-MM-DD.db` file's metadata
+ * (path, mtime, size) so the renderer can drive the snapshot
+ * picker. The service returns rows sorted newest-first; the
+ * handler forwards them verbatim.
  */
-const restoreHandler: HandlerFn<'backup:restore'> = (_req, _ctx) =>
-  Promise.resolve(Err('INTERNAL', { reason: 'NOT_IMPLEMENTED' }));
+const listHandler: HandlerFn<'backup:list'> = async () => {
+  return BackupService.listSnapshots();
+};
+
+/**
+ * `backup:restore` handler. Admin-only by RBAC. Drives the full
+ * restore + replay flow: validates the path lies inside the
+ * backups directory, disconnects Prisma, copies the snapshot over
+ * shop.db, reopens the connection, and replays the journal forward
+ * from the snapshot's recorded timestamp.
+ *
+ * Returns `Ok({ replayed })` carrying the replay telemetry
+ * (`{ batchCount, appliedCount }`) so the UI can show how many
+ * post-snapshot events were re-applied, or the service's
+ * `Err('INTERNAL', ...)` envelope on failure.
+ */
+const restoreHandler: HandlerFn<'backup:restore'> = async (req) => {
+  const result = await BackupService.restoreSnapshot({ path: req.path });
+  if (!result.ok) return result;
+  return Ok({ replayed: result.value.replayed });
+};
 
 // ---------------------------------------------------------------------------
 // Public registration entry point
@@ -91,6 +101,7 @@ const restoreHandler: HandlerFn<'backup:restore'> = (_req, _ctx) =>
  */
 export function registerBackupHandlers(): void {
   registerHandler('backup:now', {}, nowHandler);
+  registerHandler('backup:list', {}, listHandler);
   registerHandler('backup:restore', {}, restoreHandler);
 }
 
@@ -101,5 +112,6 @@ export function registerBackupHandlers(): void {
 // `registerBackupHandlers`.
 export const __testables = Object.freeze({
   nowHandler,
+  listHandler,
   restoreHandler,
 });
