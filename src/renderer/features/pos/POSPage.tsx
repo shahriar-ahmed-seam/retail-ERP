@@ -1,12 +1,22 @@
 /**
  * POS single-screen layout (tasks 7.5 + 7.6, Phase 7).
  *
- * The cashier-facing surface for the `pos:scan` and `pos:finalize`
- * channels. The page lives in one screen — scanner input on top, cart
- * in the middle, totals + discount + customer attach on the right,
- * payment panel + finalize button at the bottom — so a sale can be
- * driven without ever leaving keyboard focus on the scanner input
- * (Req 4.1, 14.3).
+ * The cashier-facing surface for the `pos:scan`, `products:list` and
+ * `pos:finalize` channels. The page lives in one screen — product
+ * search on top, cart in the middle, totals + discount + customer
+ * attach on the right, payment panel + finalize button at the bottom
+ * — so a sale can be driven without ever leaving keyboard focus on
+ * the search input (Req 4.1, 14.3).
+ *
+ * The primary input is a typeahead: the cashier types part of a
+ * product name or SKU and picks from the dropdown (debounced
+ * `products:list` with `pageSize: 8`). A barcode-scanner fallback
+ * stays wired to the same input — when the typed value matches the
+ * common alphanumeric barcode shape (`[A-Za-z0-9]{4,}`) AND no
+ * dropdown match is highlighted, Enter (or the settle-delay timer
+ * fired by a wedge scanner without a terminator) calls `pos:scan`.
+ * That keeps a USB scanner working seamlessly when one is plugged
+ * in without forcing operators to memorize barcodes when one is not.
  *
  * The cart is renderer-only state per design.md > "POS Flow" — nothing
  * about a sale exists in the database until `pos:finalize` is called.
@@ -52,7 +62,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type FormEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
 } from 'react';
 
@@ -86,11 +96,21 @@ const CUSTOMER_SEARCH_DEBOUNCE_MS = 250;
 const CUSTOMER_SEARCH_PAGE_SIZE = 20;
 
 /**
- * Brief settle delay used by the scanner input's auto-submit branch.
- * Real USB scanners terminate the keystroke burst with a CR/LF that
- * triggers the form's native submit; this fallback covers cases where
- * the scanner is configured without a terminator and the cashier is
- * manually keying a barcode.
+ * Debounce window for the product search typeahead. Tuned to feel
+ * responsive while still collapsing each keystroke burst into a
+ * single `products:list` call.
+ */
+const PRODUCT_SEARCH_DEBOUNCE_MS = 200;
+
+/** Number of dropdown rows shown for a product search. */
+const PRODUCT_SEARCH_PAGE_SIZE = 8;
+
+/**
+ * Brief settle delay used by the scanner fallback's auto-submit
+ * branch. Real USB scanners terminate the keystroke burst with a
+ * CR/LF that triggers the form's native submit; this fallback covers
+ * cases where the scanner is configured without a terminator and the
+ * cashier is manually keying a barcode.
  */
 const SCANNER_SETTLE_DELAY_MS = 200;
 
@@ -101,6 +121,15 @@ const SCANNER_SETTLE_DELAY_MS = 200;
  * and the burst-terminator path.
  */
 const SCANNER_MIN_BARCODE_LENGTH = 4;
+
+/**
+ * Shape required for the scanner barcode-fallback path. Alphanumeric
+ * keystroke bursts of this minimum length are treated as candidate
+ * barcodes; anything else (spaces, hyphens, accented characters,
+ * shorter bursts) is treated as a search term and never reaches
+ * `pos:scan`.
+ */
+const BARCODE_SHAPE = /^[a-zA-Z0-9]+$/;
 
 /** Ordered tuple of accepted payment methods. Drives the payment buttons. */
 const PAYMENT_METHODS: readonly PaymentMethod[] = ['cash', 'card', 'mobile'] as const;
@@ -341,9 +370,21 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
   const nextCartRowId = useRef(makeIdFactory('cart')).current;
   const nextPaymentRowId = useRef(makeIdFactory('payment')).current;
 
-  // ----- Scanner state ---------------------------------------------------
-  const scannerInputRef = useRef<HTMLInputElement | null>(null);
-  const [scannerValue, setScannerValue] = useState('');
+  // ----- Product search + barcode fallback state ------------------------
+  // The single text input drives both the typeahead (`products:list`)
+  // and the barcode-scanner fallback (`pos:scan`). `searchQuery` mirrors
+  // the controlled input value; `debouncedQuery` is what the typeahead
+  // effect actually fires against. `highlightedIndex` is `-1` when no
+  // row is keyboard-highlighted.
+  const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<readonly ProductDTO[]>(
+    [],
+  );
+  const [isSearching, setIsSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
 
   // ----- Cart state ------------------------------------------------------
@@ -405,50 +446,29 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
   );
 
   // ----- Re-focus helper -------------------------------------------------
-  // Centralizes the "scanner input keeps focus by default and re-focuses
+  // Centralizes the "search input keeps focus by default and re-focuses
   // after every action" requirement. Wrapped in a callback so it stays
   // referentially stable for the action handlers and the scan effect.
-  const refocusScanner = useCallback((): void => {
+  const refocusSearch = useCallback((): void => {
     // Defer one tick so focus survives the React commit that owns
     // whichever button or input the user just interacted with.
     queueMicrotask(() => {
-      scannerInputRef.current?.focus();
+      productSearchInputRef.current?.focus();
     });
   }, []);
 
-  // Initial focus + every commit re-focus.
+  // Initial focus.
   useEffect(() => {
-    scannerInputRef.current?.focus();
+    productSearchInputRef.current?.focus();
   }, []);
 
-  // ----- Scanner: scan-on-Enter + scan-on-settle -------------------------
-  const performScan = useCallback(
-    async (rawBarcode: string): Promise<void> => {
-      const barcode = rawBarcode.trim();
-      if (barcode.length === 0) return;
-
-      const result = await api['pos:scan']({ barcode });
-      if (!result.ok) {
-        // The service returns Err('VALIDATION', { field: 'barcode' })
-        // for empty input — we trim above so that path is unreachable
-        // here. Other envelopes are surfaced through the toast layer
-        // (`INTERNAL`/`UNAUTHENTICATED`); we still clear the input so
-        // the cashier can try again.
-        setScannerValue('');
-        refocusScanner();
-        return;
-      }
-
-      const product = result.value;
-      if (product === null) {
-        setScanMessage(`No product with barcode ${barcode}`);
-        setScannerValue('');
-        refocusScanner();
-        return;
-      }
-
-      setScanMessage(null);
-      // Append (or increment) into the cart.
+  // ----- Cart helper: append-or-increment for an existing line ---------
+  // Pulled out so both the dropdown-pick path and the barcode-scan
+  // path land in the cart through one code path. Keeps the
+  // "rescan increments quantity" behaviour from before, plus a
+  // matching "type-and-pick again increments quantity" behaviour.
+  const addProductToCart = useCallback(
+    (product: ProductDTO): void => {
       setCart((prev) => {
         const existing = prev.findIndex((line) => line.product.id === product.id);
         if (existing >= 0) {
@@ -470,35 +490,206 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
       }
       setServerError(null);
       setSuccess(null);
-      setScannerValue('');
-      refocusScanner();
     },
-    [api, nextCartRowId, refocusScanner],
+    [nextCartRowId],
   );
 
-  // Settle-delay auto-submit. Fires after the scanner input has been
-  // idle for `SCANNER_SETTLE_DELAY_MS` AND the value matches the
-  // common alphanumeric barcode shape. Enter still wins on its own —
-  // pressing Enter resets the timer and triggers `performScan`
-  // synchronously.
+  // ----- Barcode-scanner fallback: scan-on-Enter + scan-on-settle -------
+  const performScan = useCallback(
+    async (rawBarcode: string): Promise<void> => {
+      const barcode = rawBarcode.trim();
+      if (barcode.length === 0) return;
+
+      const result = await api['pos:scan']({ barcode });
+      if (!result.ok) {
+        // The service returns Err('VALIDATION', { field: 'barcode' })
+        // for empty input — we trim above so that path is unreachable
+        // here. Other envelopes are surfaced through the toast layer
+        // (`INTERNAL`/`UNAUTHENTICATED`); we still clear the input so
+        // the cashier can try again.
+        setSearchQuery('');
+        setDebouncedQuery('');
+        setShowResults(false);
+        setSearchResults([]);
+        setHighlightedIndex(-1);
+        refocusSearch();
+        return;
+      }
+
+      const product = result.value;
+      if (product === null) {
+        setScanMessage(`No product with barcode ${barcode}`);
+        setSearchQuery('');
+        setDebouncedQuery('');
+        setShowResults(false);
+        setSearchResults([]);
+        setHighlightedIndex(-1);
+        refocusSearch();
+        return;
+      }
+
+      setScanMessage(null);
+      addProductToCart(product);
+      setSearchQuery('');
+      setDebouncedQuery('');
+      setShowResults(false);
+      setSearchResults([]);
+      setHighlightedIndex(-1);
+      refocusSearch();
+    },
+    [addProductToCart, api, refocusSearch],
+  );
+
+  // ----- Product search: debounce + fetch -------------------------------
+  // Mirrors the customer typeahead's two-effect pattern. The first
+  // effect debounces `searchQuery` into `debouncedQuery`; the second
+  // fires `products:list` against the debounced value and populates
+  // the dropdown. The dropdown opens lazily on the first non-empty
+  // keystroke and stays open until the cashier picks a row, presses
+  // Escape, or clears the input.
   useEffect(() => {
-    const trimmed = scannerValue.trim();
+    if (searchQuery === debouncedQuery) return undefined;
+    const handle = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, PRODUCT_SEARCH_DEBOUNCE_MS);
+    return () => {
+      clearTimeout(handle);
+    };
+  }, [searchQuery, debouncedQuery]);
+
+  useEffect(() => {
+    const trimmed = debouncedQuery.trim();
+    if (trimmed.length < 1) {
+      setSearchResults([]);
+      setIsSearching(false);
+      setShowResults(false);
+      setHighlightedIndex(-1);
+      return undefined;
+    }
+    let cancelled = false;
+    setIsSearching(true);
+    setShowResults(true);
+    void (async () => {
+      const result = await api['products:list']({
+        search: trimmed,
+        pageSize: PRODUCT_SEARCH_PAGE_SIZE,
+      });
+      if (cancelled) return;
+      setIsSearching(false);
+      if (result.ok) {
+        const rows = result.value.rows.slice(0, PRODUCT_SEARCH_PAGE_SIZE);
+        setSearchResults(rows);
+        setHighlightedIndex(rows.length > 0 ? 0 : -1);
+      } else {
+        setSearchResults([]);
+        setHighlightedIndex(-1);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [api, debouncedQuery]);
+
+  // ----- Settle-delay scanner fallback ---------------------------------
+  // Fires after the search input has been idle for
+  // `SCANNER_SETTLE_DELAY_MS` AND the value matches the common
+  // alphanumeric barcode shape AND no live dropdown match exists.
+  // Real USB scanners emit a CR/LF terminator that flows through
+  // the Enter handler below; this branch only fires for scanners
+  // configured without a terminator. Live dropdown matches always
+  // win over the scanner fallback so a cashier typing "wid" never
+  // races against `pos:scan('wid')`.
+  useEffect(() => {
+    const trimmed = searchQuery.trim();
     if (trimmed.length < SCANNER_MIN_BARCODE_LENGTH) return undefined;
-    if (!/^[a-zA-Z0-9]+$/.test(trimmed)) return undefined;
+    if (!BARCODE_SHAPE.test(trimmed)) return undefined;
+    if (searchResults.length > 0) return undefined;
+    if (isSearching) return undefined;
     const handle = setTimeout(() => {
       void performScan(trimmed);
     }, SCANNER_SETTLE_DELAY_MS);
     return () => {
       clearTimeout(handle);
     };
-  }, [scannerValue, performScan]);
+  }, [searchQuery, searchResults, isSearching, performScan]);
 
-  const handleScannerSubmit = useCallback(
-    (event: FormEvent<HTMLFormElement>): void => {
-      event.preventDefault();
-      void performScan(scannerValue);
+  // ----- Search input handlers -----------------------------------------
+  const selectSearchResult = useCallback(
+    (product: ProductDTO): void => {
+      addProductToCart(product);
+      setScanMessage(null);
+      setSearchQuery('');
+      setDebouncedQuery('');
+      setSearchResults([]);
+      setShowResults(false);
+      setHighlightedIndex(-1);
+      refocusSearch();
     },
-    [performScan, scannerValue],
+    [addProductToCart, refocusSearch],
+  );
+
+  const handleSearchKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+      if (event.key === 'ArrowDown') {
+        if (searchResults.length === 0) return;
+        event.preventDefault();
+        setShowResults(true);
+        setHighlightedIndex((prev) => {
+          if (prev < 0) return 0;
+          return prev + 1 >= searchResults.length ? prev : prev + 1;
+        });
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        if (searchResults.length === 0) return;
+        event.preventDefault();
+        setHighlightedIndex((prev) => {
+          if (prev <= 0) return 0;
+          return prev - 1;
+        });
+        return;
+      }
+      if (event.key === 'Escape') {
+        if (showResults || searchResults.length > 0 || searchQuery.length > 0) {
+          event.preventDefault();
+          setShowResults(false);
+          setHighlightedIndex(-1);
+        }
+        return;
+      }
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        // Highlighted dropdown row wins.
+        if (
+          showResults &&
+          highlightedIndex >= 0 &&
+          highlightedIndex < searchResults.length
+        ) {
+          const picked = searchResults[highlightedIndex];
+          if (picked !== undefined) {
+            selectSearchResult(picked);
+            return;
+          }
+        }
+        // No live dropdown match — fall back to the scanner path
+        // when the value looks like a barcode.
+        const trimmed = searchQuery.trim();
+        if (
+          trimmed.length >= SCANNER_MIN_BARCODE_LENGTH &&
+          BARCODE_SHAPE.test(trimmed)
+        ) {
+          void performScan(trimmed);
+        }
+      }
+    },
+    [
+      highlightedIndex,
+      performScan,
+      searchQuery,
+      searchResults,
+      selectSearchResult,
+      showResults,
+    ],
   );
 
   // ----- Cart mutations --------------------------------------------------
@@ -519,8 +710,8 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     });
     setServerError(null);
     setSuccess(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   const setLineQuantity = useCallback(
     (rowId: string, raw: string): void => {
@@ -560,8 +751,8 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
       kind === 'fixed' ? { kind: 'fixed', amount: '0' } : { kind: 'percent', percent: '0' },
     );
     setServerError(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   const setDiscountAmount = useCallback((raw: string): void => {
     setDiscount((prev) => {
@@ -635,14 +826,14 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     setDebouncedCustomerQuery('');
     setCustomerResults([]);
     setServerError(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   const clearCustomer = useCallback((): void => {
     setCustomer(null);
     setServerError(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   // ----- Inline customer create (task 9.3) ------------------------------
   // Cashier-friendly path for capturing a walk-in customer's details
@@ -673,8 +864,8 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     setNewCustomerName('');
     setNewCustomerPhone('');
     setCreateCustomerError(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   const submitCreateCustomer = useCallback((): void => {
     const trimmedName = newCustomerName.trim();
@@ -725,9 +916,9 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
         { rowId: nextPaymentRowId(), method, amount: initialAmount },
       ]);
       setServerError(null);
-      refocusScanner();
+      refocusSearch();
     },
-    [nextPaymentRowId, refocusScanner, remainingBalance],
+    [nextPaymentRowId, refocusSearch, remainingBalance],
   );
 
   const setPaymentAmount = useCallback((rowId: string, raw: string): void => {
@@ -743,8 +934,8 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
   const removePayment = useCallback((rowId: string): void => {
     setPayments((prev) => prev.filter((p) => p.rowId !== rowId));
     setServerError(null);
-    refocusScanner();
-  }, [refocusScanner]);
+    refocusSearch();
+  }, [refocusSearch]);
 
   // ----- Finalize gating + submit ---------------------------------------
   const hasAnyOutOfStock = outOfStockProductIds.size > 0;
@@ -805,7 +996,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
             serialNo: result.value.serialNo,
           });
           onFinalized?.(result.value.sale);
-          refocusScanner();
+          refocusSearch();
           return;
         }
         // Map error envelopes per the task spec.
@@ -825,7 +1016,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
         setServerError(env);
       } finally {
         setSubmitting(false);
-        refocusScanner();
+        refocusSearch();
       }
     })();
   }, [
@@ -835,7 +1026,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     customer,
     onFinalized,
     payments,
-    refocusScanner,
+    refocusSearch,
     totals.discountAmount,
     totals.grandTotal,
     totals.subtotal,
@@ -880,19 +1071,19 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
         active instanceof HTMLInputElement ||
         active instanceof HTMLTextAreaElement ||
         active instanceof HTMLSelectElement;
-      const isScanner =
+      const isProductSearch =
         active instanceof HTMLInputElement &&
-        active.getAttribute('data-testid') === 'pos-scanner-input';
-      // Suppress shortcuts when any non-scanner input/textarea is
+        active.getAttribute('data-testid') === 'pos-product-search';
+      // Suppress shortcuts when any non-search input/textarea is
       // focused so the cashier can edit a quantity or a discount field
       // without function keys hijacking focus.
-      if (isFormElement && !isScanner) return;
+      if (isFormElement && !isProductSearch) return;
 
       switch (key) {
         case 'F1': {
           event.preventDefault();
-          scannerInputRef.current?.focus();
-          scannerInputRef.current?.select();
+          productSearchInputRef.current?.focus();
+          productSearchInputRef.current?.select();
           return;
         }
         case 'F2': {
@@ -993,29 +1184,67 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
       }}
     >
       {/* ============================================================ */}
-      {/* Scanner panel (top-left)                                     */}
+      {/* Product search panel (top-left)                              */}
       {/* ============================================================ */}
-      <section style={{ gridArea: 'scanner' }}>
-        <form onSubmit={handleScannerSubmit} noValidate>
-          <label
-            htmlFor={`${idPrefix}-scanner`}
-            style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}
-          >
-            Scan barcode <span style={{ color: '#777', fontWeight: 400 }}>(F1 to focus)</span>
-          </label>
+      <section style={{ gridArea: 'scanner', position: 'relative' }}>
+        <label
+          htmlFor={`${idPrefix}-product-search`}
+          style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 600 }}
+        >
+          Find product{' '}
+          <span style={{ color: '#777', fontWeight: 400 }}>(F1 to focus)</span>
+        </label>
+        <div
+          id={`${idPrefix}-product-search-help`}
+          style={{
+            color: '#666',
+            fontSize: '0.8125rem',
+            marginBottom: '0.375rem',
+          }}
+        >
+          Type to search. Press Enter on a match to add — or scan a barcode if
+          you have a scanner.
+        </div>
+        <div style={{ position: 'relative' }}>
           <input
-            ref={scannerInputRef}
-            id={`${idPrefix}-scanner`}
-            data-testid="pos-scanner-input"
+            ref={productSearchInputRef}
+            id={`${idPrefix}-product-search`}
+            data-testid="pos-product-search"
             type="search"
             autoComplete="off"
-            placeholder="Scan or type a barcode and press Enter"
+            placeholder="Type a product name or SKU…"
             title="Add product manually (F1)"
-            value={scannerValue}
+            aria-autocomplete="list"
+            aria-controls={`${idPrefix}-product-search-results`}
+            aria-expanded={showResults}
+            aria-activedescendant={
+              highlightedIndex >= 0 && highlightedIndex < searchResults.length
+                ? `${idPrefix}-product-search-result-${
+                    searchResults[highlightedIndex]?.id ?? ''
+                  }`
+                : undefined
+            }
+            aria-describedby={`${idPrefix}-product-search-help`}
+            value={searchQuery}
             onChange={(e) => {
-              setScannerValue(e.target.value);
+              const next = e.target.value;
+              setSearchQuery(next);
               setScanMessage(null);
+              if (next.length === 0) {
+                setShowResults(false);
+                setSearchResults([]);
+                setDebouncedQuery('');
+                setHighlightedIndex(-1);
+              } else {
+                setShowResults(true);
+              }
             }}
+            onFocus={() => {
+              if (searchQuery.trim().length > 0 && searchResults.length > 0) {
+                setShowResults(true);
+              }
+            }}
+            onKeyDown={handleSearchKeyDown}
             style={{
               width: '100%',
               padding: '0.625rem',
@@ -1023,21 +1252,34 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
               boxSizing: 'border-box',
             }}
           />
-          {scanMessage !== null ? (
-            <div
-              role="status"
-              aria-live="polite"
-              data-testid="pos-scan-message"
-              style={{
-                marginTop: '0.25rem',
-                color: '#a55',
-                fontSize: '0.875rem',
+          {showResults && searchQuery.trim().length > 0 ? (
+            <ProductSearchDropdown
+              idPrefix={idPrefix}
+              isSearching={isSearching}
+              query={debouncedQuery.trim()}
+              results={searchResults}
+              highlightedIndex={highlightedIndex}
+              onPick={selectSearchResult}
+              onHover={(index) => {
+                setHighlightedIndex(index);
               }}
-            >
-              {scanMessage}
-            </div>
+            />
           ) : null}
-        </form>
+        </div>
+        {scanMessage !== null ? (
+          <div
+            role="status"
+            aria-live="polite"
+            data-testid="pos-scan-message"
+            style={{
+              marginTop: '0.25rem',
+              color: '#a55',
+              fontSize: '0.875rem',
+            }}
+          >
+            {scanMessage}
+          </div>
+        ) : null}
       </section>
 
       {/* ============================================================ */}
@@ -1065,7 +1307,7 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
               flex: 1,
             }}
           >
-            Cart is empty. Scan a product to get started.
+            Cart is empty. Search for a product to get started.
           </div>
         ) : (
           <div role="rowgroup" style={{ flex: 1, overflowY: 'auto' }}>
@@ -1227,6 +1469,164 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
   );
 }
 
+
+// ===========================================================================
+// ProductSearchDropdown
+// ===========================================================================
+
+interface ProductSearchDropdownProps {
+  readonly idPrefix: string;
+  readonly isSearching: boolean;
+  readonly query: string;
+  readonly results: readonly ProductDTO[];
+  readonly highlightedIndex: number;
+  readonly onPick: (product: ProductDTO) => void;
+  readonly onHover: (index: number) => void;
+}
+
+function ProductSearchDropdown({
+  idPrefix,
+  isSearching,
+  query,
+  results,
+  highlightedIndex,
+  onPick,
+  onHover,
+}: ProductSearchDropdownProps): ReactElement {
+  return (
+    <ul
+      id={`${idPrefix}-product-search-results`}
+      role="listbox"
+      aria-label="Product search results"
+      data-testid="pos-product-search-results"
+      style={{
+        listStyle: 'none',
+        margin: '0.25rem 0 0',
+        padding: 0,
+        position: 'absolute',
+        top: '100%',
+        left: 0,
+        right: 0,
+        zIndex: 10,
+        background: '#fff',
+        border: '1px solid #ddd',
+        borderRadius: 4,
+        maxHeight: '20rem',
+        overflowY: 'auto',
+        boxShadow: '0 4px 12px rgba(0, 0, 0, 0.08)',
+      }}
+    >
+      {isSearching && results.length === 0 ? (
+        <li
+          data-testid="pos-product-search-loading"
+          style={{ padding: '0.5rem 0.75rem', color: '#777' }}
+        >
+          Searching…
+        </li>
+      ) : null}
+      {!isSearching && results.length === 0 && query.length > 0 ? (
+        <li
+          data-testid="pos-product-search-empty"
+          style={{ padding: '0.5rem 0.75rem', color: '#777' }}
+        >
+          No products match
+        </li>
+      ) : null}
+      {results.map((p, index) => {
+        const highlighted = index === highlightedIndex;
+        return (
+          <li
+            key={p.id}
+            id={`${idPrefix}-product-search-result-${p.id}`}
+            role="option"
+            aria-selected={highlighted}
+            data-testid={`pos-product-search-result-${p.id}`}
+            data-highlighted={highlighted ? 'true' : undefined}
+            // Use mousedown (instead of click) so the input doesn't
+            // blur out from under us before the pick is recorded.
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPick(p);
+            }}
+            onMouseEnter={() => {
+              onHover(index);
+            }}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '1fr 8rem 6rem 5rem 4rem',
+              gap: '0.5rem',
+              alignItems: 'center',
+              padding: '0.5rem 0.75rem',
+              borderBottom: '1px solid #eee',
+              cursor: 'pointer',
+              background: highlighted ? '#eef4ff' : 'transparent',
+            }}
+          >
+            <div style={{ minWidth: 0 }}>
+              <div
+                style={{
+                  fontWeight: 600,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {p.name}
+              </div>
+            </div>
+            <div
+              style={{
+                color: '#666',
+                fontSize: '0.875rem',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {p.sku}
+            </div>
+            <div
+              style={{
+                textAlign: 'right',
+                fontVariantNumeric: 'tabular-nums',
+                fontWeight: 600,
+              }}
+            >
+              {formatMoney(p.sellPrice)}
+            </div>
+            <div
+              data-testid={`pos-product-search-result-${p.id}-on-hand`}
+              style={{
+                textAlign: 'right',
+                color: p.onHand <= 0 ? '#c33' : '#555',
+                fontSize: '0.875rem',
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {p.onHand}
+            </div>
+            <button
+              type="button"
+              data-testid={`pos-product-search-result-${p.id}-add`}
+              aria-label={`Add ${p.name}`}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                onPick(p);
+              }}
+              style={{
+                padding: '0.25rem 0.5rem',
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+              }}
+            >
+              Add
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
 
 // ===========================================================================
 // CartTableHeader / CartRow

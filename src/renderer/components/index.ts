@@ -22,3 +22,6 @@ export { LowStockBanner } from './LowStockBanner';
 export type { LowStockBannerProps } from './LowStockBanner';
 
 export { ToastBridge } from './ToastBridge';
+
+export { TitleBar, TITLE_BAR_HEIGHT } from './TitleBar';
+export type { TitleBarProps } from './TitleBar';

@@ -306,6 +306,23 @@ function createWindow(): void {
     width: 1280,
     height: 800,
     show: false,
+    // Frameless chrome (Discord / WhatsApp / VS Code style): the OS
+    // title bar is hidden and the renderer paints its own. The
+    // renderer's `<TitleBar>` component declares a CSS-driven drag
+    // region (`-webkit-app-region: drag`) so the user can still move
+    // the window by the top strip, and three custom buttons (min /
+    // max-restore / close) call window-control IPC channels exposed
+    // by the preload bridge below.
+    //
+    // `titleBarStyle: 'hidden'` is the macOS counterpart — it hides
+    // the title bar but keeps the traffic-light overlay buttons
+    // visible by default, so macOS users get the platform-native
+    // close/minimize/maximize controls floating over our custom
+    // title bar. `titleBarOverlay` adjusts the inset so our buttons
+    // do not collide with them.
+    frame: false,
+    titleBarStyle: 'hidden',
+    backgroundColor: '#0f172a',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -317,6 +334,18 @@ function createWindow(): void {
   win.on('ready-to-show', () => {
     win.show();
   });
+
+  // Maximized-state notifier so the renderer can swap the
+  // maximize-button glyph between "maximize" and "restore" without
+  // polling. Sent on every transition; the renderer ignores
+  // duplicates by comparing against its local state.
+  const sendMaximizedState = (): void => {
+    if (win.isDestroyed()) return;
+    win.webContents.send('window:maximizedState', { maximized: win.isMaximized() });
+  };
+  win.on('maximize', sendMaximizedState);
+  win.on('unmaximize', sendMaximizedState);
+  win.webContents.once('did-finish-load', sendMaximizedState);
 
   // Per-window session lifecycle hooks (Phase 3, task 3.5):
   //   - `did-start-loading` clears the binding so a renderer reload
@@ -339,6 +368,50 @@ function createWindow(): void {
   } else {
     void win.loadFile(join(__dirname, '../renderer/index.html'));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Frameless window controls
+// ---------------------------------------------------------------------------
+
+/**
+ * Register window-control channels for the custom title bar
+ * (`window:minimize`, `window:maximize`, `window:close`).
+ *
+ * The application uses a frameless `BrowserWindow` (`frame: false`)
+ * so the renderer paints its own title bar. The native min/max/close
+ * buttons no longer exist, so the renderer dispatches these IPC
+ * messages when the user clicks the custom buttons.
+ *
+ * These channels are pre-auth — the login window must be closeable —
+ * and one-way fire-and-forget, so we use `ipcMain.on` (no Result
+ * envelope). The handlers look up the source window via
+ * `BrowserWindow.fromWebContents(event.sender)`; if the lookup
+ * fails (window already destroyed) the handler is a no-op.
+ *
+ * Registered once during bootstrap, idempotent because the bootstrap
+ * itself is idempotent.
+ */
+function registerWindowControls(): void {
+  ipcMain.on('window:minimize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win === null || win.isDestroyed()) return;
+    if (win.isMinimizable()) win.minimize();
+  });
+  ipcMain.on('window:maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win === null || win.isDestroyed()) return;
+    if (win.isMaximized()) {
+      win.unmaximize();
+    } else if (win.isMaximizable()) {
+      win.maximize();
+    }
+  });
+  ipcMain.on('window:close', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win === null || win.isDestroyed()) return;
+    win.close();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +442,11 @@ function createMigrationProgressWindow(): BrowserWindow {
     maximizable: false,
     fullscreenable: false,
     title: 'Core Retail ERP — Updating database',
+    // Frameless to match the main window. The migration page renders
+    // its own minimal close-only chrome inline.
+    frame: false,
+    titleBarStyle: 'hidden',
+    backgroundColor: '#0f172a',
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -562,6 +640,11 @@ async function runFirstRunBootstrap(): Promise<boolean> {
 }
 
 void app.whenReady().then(async () => {
+  // Frameless title bar IPC must be registered before any window
+  // opens — including the migration progress window — so the
+  // custom min/max/close buttons work from the very first paint.
+  registerWindowControls();
+
   // Phase 16, tasks 16.2 + 16.7 — first-run database bootstrap.
   // The migration progress `BrowserWindow` is the ONLY window the
   // user can see while migrations run; the main application window

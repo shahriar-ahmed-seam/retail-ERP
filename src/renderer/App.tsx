@@ -36,6 +36,7 @@ import {
 } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 
+import { TitleBar } from '@renderer/components/TitleBar';
 import { ToastBridge } from '@renderer/components/ToastBridge';
 import { ToastProvider } from '@renderer/components/ui';
 import { SetupPage } from '@renderer/features/setup';
@@ -62,6 +63,31 @@ function SetupProbeSplash(): ReactElement {
     >
       Loading…
     </main>
+  );
+}
+
+/**
+ * Wraps every top-level branch (splash, setup, route tree) in the
+ * frameless-window chrome: a fixed-height `<TitleBar>` pinned at the
+ * top of a flex column, with the branch's content filling the rest.
+ * Centralizing it here keeps the title bar present across every
+ * surface — login, setup, the authenticated shell — without each
+ * branch repeating the layout boilerplate.
+ */
+function FramelessShell({ children }: { children: ReactElement }): ReactElement {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        width: '100vw',
+        overflow: 'hidden',
+      }}
+    >
+      <TitleBar />
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>{children}</div>
+    </div>
   );
 }
 
@@ -119,7 +145,9 @@ export function App(): ReactElement {
     return (
       <ToastProvider>
         <ToastBridge />
-        <SetupProbeSplash />
+        <FramelessShell>
+          <SetupProbeSplash />
+        </FramelessShell>
       </ToastProvider>
     );
   }
@@ -133,22 +161,26 @@ export function App(): ReactElement {
     return (
       <ToastProvider>
         <ToastBridge />
-        <SetupPage />
-        {setupProbeError !== null ? (
-          <div
-            role="status"
-            style={{
-              maxWidth: '24rem',
-              margin: '0 auto 2rem',
-              padding: '0.75rem',
-              color: '#a66',
-              fontSize: '0.875rem',
-              textAlign: 'center',
-            }}
-          >
-            Setup probe failed: {setupProbeError}
-          </div>
-        ) : null}
+        <FramelessShell>
+          <>
+            <SetupPage />
+            {setupProbeError !== null ? (
+              <div
+                role="status"
+                style={{
+                  maxWidth: '24rem',
+                  margin: '0 auto 2rem',
+                  padding: '0.75rem',
+                  color: '#a66',
+                  fontSize: '0.875rem',
+                  textAlign: 'center',
+                }}
+              >
+                Setup probe failed: {setupProbeError}
+              </div>
+            ) : null}
+          </>
+        </FramelessShell>
       </ToastProvider>
     );
   }
@@ -156,9 +188,11 @@ export function App(): ReactElement {
   return (
     <ToastProvider>
       <ToastBridge />
-      <MemoryRouter initialEntries={['/']}>
-        <AppRoutes />
-      </MemoryRouter>
+      <FramelessShell>
+        <MemoryRouter initialEntries={['/']}>
+          <AppRoutes />
+        </MemoryRouter>
+      </FramelessShell>
     </ToastProvider>
   );
 }

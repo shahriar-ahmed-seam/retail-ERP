@@ -40,6 +40,30 @@ declare global {
         handler: (event: MigrationProgressEvent) => void,
       ) => () => void;
     };
+    /**
+     * Pre-auth bridge for frameless window controls (custom title
+     * bar). Exposed by the preload script alongside `api` and
+     * `setupApi`; one-way fire-and-forget so it does not return
+     * Result envelopes.
+     */
+    readonly windowApi: {
+      readonly minimize: () => void;
+      readonly maximize: () => void;
+      readonly close: () => void;
+      readonly onMaximizedStateChange: (
+        handler: (state: { maximized: boolean }) => void,
+      ) => () => void;
+    };
+  }
+}
+
+// Augment React's CSSProperties with the Electron-only
+// `-webkit-app-region` rule used by the frameless title bar
+// (`src/renderer/components/TitleBar.tsx`). Lives in the renderer's
+// own type-augmentation file so the declaration is process-scoped.
+declare module 'react' {
+  interface CSSProperties {
+    WebkitAppRegion?: 'drag' | 'no-drag';
   }
 }
 

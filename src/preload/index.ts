@@ -132,3 +132,42 @@ contextBridge.exposeInMainWorld('setupApi', {
     };
   },
 });
+
+// ---------------------------------------------------------------------------
+// `windowApi` — pre-auth bridge for frameless window controls
+// ---------------------------------------------------------------------------
+//
+// The application uses `frame: false` BrowserWindows so the renderer
+// paints its own title bar (Discord / WhatsApp / VS Code style). The
+// custom min/max/close buttons need to dispatch native window
+// operations to the main process. These channels are intentionally
+// pre-auth (no session needed — the login window must be closeable)
+// and outside the typed `IpcContract` because they are one-way
+// fire-and-forget; the typed `Api` is for `Result`-returning RPC.
+//
+// `onMaximizedStateChange` lets the renderer subscribe to
+// maximize/unmaximize transitions so the maximize button glyph can
+// flip between "maximize" and "restore" without polling.
+
+contextBridge.exposeInMainWorld('windowApi', {
+  minimize(): void {
+    ipcRenderer.send('window:minimize');
+  },
+  maximize(): void {
+    ipcRenderer.send('window:maximize');
+  },
+  close(): void {
+    ipcRenderer.send('window:close');
+  },
+  onMaximizedStateChange(
+    handler: (state: { maximized: boolean }) => void,
+  ): () => void {
+    const wrapped = (_e: IpcRendererEvent, payload: { maximized: boolean }): void => {
+      handler(payload);
+    };
+    ipcRenderer.on('window:maximizedState', wrapped);
+    return () => {
+      ipcRenderer.removeListener('window:maximizedState', wrapped);
+    };
+  },
+});

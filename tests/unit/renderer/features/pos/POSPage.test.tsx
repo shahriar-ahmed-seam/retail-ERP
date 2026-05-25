@@ -5,10 +5,25 @@
  * the conventions established by `PurchaseCreatePage.test.tsx` and
  * `AdjustPage.test.tsx`.
  *
+ * The page's primary input is a typeahead-driven product search that
+ * calls `products:list`. A barcode-scanner fallback stays wired to
+ * the same input — when the typed value is alphanumeric and at least
+ * four characters long AND the typeahead returns no live matches,
+ * pressing Enter falls through to `pos:scan`. The scanner-flow tests
+ * below intentionally type alphanumeric barcodes against a stub
+ * whose `products:list` returns an empty page so the fallback path
+ * fires; the typeahead-flow tests stub `products:list` with the
+ * fixtures the cashier should see in the dropdown.
+ *
  * Coverage:
  *   - Empty cart keeps Finalize disabled.
- *   - Scan a product → cart row appears with quantity 1.
- *   - Scan the same product twice → quantity becomes 2.
+ *   - Scanner fallback: barcode Enter → `pos:scan` → cart row appears.
+ *   - Scanner fallback: same barcode twice → quantity becomes 2.
+ *   - Typeahead: typing fires `products:list` with the search term.
+ *   - Typeahead: clicking a row adds the product with quantity 1.
+ *   - Typeahead: ArrowDown highlights, Enter on highlighted adds.
+ *   - Typeahead: empty results render the "No products match" copy.
+ *   - Typeahead: Escape closes the dropdown without adding.
  *   - Edit quantity → totals update.
  *   - Apply 10% discount → discount + grand total update; tax computed
  *     on post-discount subtotal.
@@ -80,7 +95,7 @@ function makeProduct(i: number, overrides: Partial<ProductDTO> = {}): ProductDTO
     name: `Product ${String(i)}`,
     categoryId: 'c-fruit',
     categoryName: 'Fruit',
-    barcode: `BC-${String(i)}`,
+    barcode: `BCBC${String(i)}`,
     buyPrice: '5.00',
     sellPrice: '10.00',
     taxRate: '0.10',
@@ -136,6 +151,7 @@ interface BuiltStub {
   readonly posFinalize: ReturnType<typeof vi.fn>;
   readonly customersList: ReturnType<typeof vi.fn>;
   readonly customersUpsert: ReturnType<typeof vi.fn>;
+  readonly productsList: ReturnType<typeof vi.fn>;
 }
 
 function buildStub(opts: {
@@ -143,6 +159,18 @@ function buildStub(opts: {
   finalize?: ReturnType<typeof vi.fn>;
   customers?: readonly CustomerDTO[];
   customersUpsert?: ReturnType<typeof vi.fn>;
+  /**
+   * Stubbed return value for `products:list`. The page uses
+   * `products:list` for the search-typeahead dropdown. Defaults to
+   * an empty page so the barcode-scanner fallback path fires when
+   * the test types an alphanumeric value and presses Enter.
+   */
+  searchProducts?: readonly ProductDTO[];
+  /**
+   * Override the entire `products:list` mock when a test needs to
+   * assert on the request payload or simulate an error envelope.
+   */
+  productsList?: ReturnType<typeof vi.fn>;
 }): BuiltStub {
   const map = opts.scanByBarcode ?? {};
   const posScan = vi.fn((req: { barcode: string }) => {
@@ -173,13 +201,25 @@ function buildStub(opts: {
     opts.customersUpsert ??
     vi.fn(() => Promise.resolve(Ok(makeCustomer())));
 
+  const productsList =
+    opts.productsList ??
+    vi.fn(() => Promise.resolve(Ok(pageOf(opts.searchProducts ?? []))));
+
   const stub: Partial<Api> = {
     'pos:scan': posScan,
     'pos:finalize': posFinalize,
     'customers:list': customersList,
     'customers:upsert': customersUpsert,
+    'products:list': productsList,
   };
-  return { stub, posScan, posFinalize, customersList, customersUpsert };
+  return {
+    stub,
+    posScan,
+    posFinalize,
+    customersList,
+    customersUpsert,
+    productsList,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +235,7 @@ async function scanBarcode(opts: {
   user: ReturnType<typeof userEvent.setup>;
   barcode: string;
 }): Promise<void> {
-  const input = screen.getByTestId('pos-scanner-input');
+  const input = screen.getByTestId('pos-product-search');
   await opts.user.clear(input);
   await opts.user.type(input, `${opts.barcode}{Enter}`);
 }
@@ -217,22 +257,22 @@ describe('<POSPage /> — initial state', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Tests — scanner
+// Tests — scanner fallback
 // ---------------------------------------------------------------------------
 
-describe('<POSPage /> — scanner', () => {
+describe('<POSPage /> — scanner fallback', () => {
   it('appends a cart row with quantity 1 on a successful scan', async () => {
-    const product = makeProduct(1, { barcode: 'BC-1' });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const product = makeProduct(1, { barcode: 'BCBC1' });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
 
     await waitFor(() => {
-      expect(built.posScan).toHaveBeenCalledWith({ barcode: 'BC-1' });
+      expect(built.posScan).toHaveBeenCalledWith({ barcode: 'BCBC1' });
     });
 
     await waitFor(() => {
@@ -246,21 +286,21 @@ describe('<POSPage /> — scanner', () => {
   });
 
   it('increments quantity when the same product is scanned twice', async () => {
-    const product = makeProduct(1, { barcode: 'BC-1' });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const product = makeProduct(1, { barcode: 'BCBC1' });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await waitFor(() => {
       expect(
         screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
       ).toHaveValue('1');
     });
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
 
     await waitFor(() => {
       expect(
@@ -288,23 +328,235 @@ describe('<POSPage /> — scanner', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Tests — product search typeahead
+// ---------------------------------------------------------------------------
+
+describe('<POSPage /> — product search typeahead', () => {
+  it('debounces typing into a single products:list call with the search term and pageSize 8', async () => {
+    const widget = makeProduct(1, {
+      id: 'p-widget',
+      sku: 'SKU-WIDGET',
+      name: 'Widget',
+      barcode: null,
+      sellPrice: '12.50',
+    });
+    const built = buildStub({ searchProducts: [widget] });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    const input = screen.getByTestId('pos-product-search');
+    await user.type(input, 'wid');
+
+    // The debounce window collapses the keystroke burst into a
+    // single call.
+    await waitFor(() => {
+      expect(built.productsList).toHaveBeenCalled();
+    });
+    const call = built.productsList.mock.calls.at(-1);
+    expect(call?.[0]).toEqual({ search: 'wid', pageSize: 8 });
+
+    // The result row renders with name, SKU, sell price, and an
+    // explicit "Add" affordance. The on-hand column is also wired.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-product-search-result-${widget.id}`),
+      ).toBeInTheDocument();
+    });
+    const row = screen.getByTestId(`pos-product-search-result-${widget.id}`);
+    expect(row).toHaveTextContent('Widget');
+    expect(row).toHaveTextContent('SKU-WIDGET');
+    expect(row).toHaveTextContent('12.50');
+    expect(
+      screen.getByTestId(`pos-product-search-result-${widget.id}-add`),
+    ).toBeInTheDocument();
+  });
+
+  it('clicking a result row adds the product to the cart with quantity 1', async () => {
+    const widget = makeProduct(2, {
+      id: 'p-widget',
+      sku: 'SKU-WIDGET',
+      name: 'Widget',
+      barcode: null,
+      sellPrice: '12.50',
+      taxRate: '0.00',
+    });
+    const built = buildStub({ searchProducts: [widget] });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await user.type(screen.getByTestId('pos-product-search'), 'wid');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-product-search-result-${widget.id}`),
+      ).toBeInTheDocument();
+    });
+
+    // Use mouseDown via fireEvent semantics — the dropdown row uses
+    // onMouseDown so the input doesn't blur out before the pick is
+    // recorded. user.click drives a real mouse sequence including
+    // mousedown so this is the same as the cashier clicking the row.
+    await user.click(
+      screen.getByTestId(`pos-product-search-result-${widget.id}`),
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${widget.id}`),
+      ).toBeInTheDocument();
+    });
+    expect(
+      screen.getByTestId(`pos-cart-row-${widget.id}-quantity`),
+    ).toHaveValue('1');
+
+    // Dropdown closes and input clears.
+    expect(
+      screen.queryByTestId('pos-product-search-results'),
+    ).not.toBeInTheDocument();
+    expect(screen.getByTestId('pos-product-search')).toHaveValue('');
+  });
+
+  it('ArrowDown highlights the next result; Enter on highlighted adds it', async () => {
+    const a = makeProduct(1, {
+      id: 'p-a',
+      sku: 'SKU-A',
+      name: 'Apple',
+      barcode: null,
+    });
+    const b = makeProduct(2, {
+      id: 'p-b',
+      sku: 'SKU-B',
+      name: 'Apricot',
+      barcode: null,
+    });
+    const built = buildStub({ searchProducts: [a, b] });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await user.type(screen.getByTestId('pos-product-search'), 'ap');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-product-search-result-${b.id}`),
+      ).toBeInTheDocument();
+    });
+
+    // First row is auto-highlighted; ArrowDown moves to the second.
+    await user.keyboard('{ArrowDown}');
+    expect(
+      screen.getByTestId(`pos-product-search-result-${b.id}`),
+    ).toHaveAttribute('data-highlighted', 'true');
+
+    // Enter picks the highlighted (second) row.
+    await user.keyboard('{Enter}');
+
+    await waitFor(() => {
+      expect(screen.getByTestId(`pos-cart-row-${b.id}`)).toBeInTheDocument();
+    });
+    // The first row should NOT have been added.
+    expect(screen.queryByTestId(`pos-cart-row-${a.id}`)).not.toBeInTheDocument();
+  });
+
+  it('renders "No products match" when the search returns nothing', async () => {
+    const built = buildStub({ searchProducts: [] });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    // Use a non-barcode-shape value (contains a space) so the
+    // settle-delay scanner fallback never fires while we wait for
+    // the empty-state copy to render.
+    await user.type(screen.getByTestId('pos-product-search'), 'no match');
+    await waitFor(() => {
+      expect(built.productsList).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('pos-product-search-empty')).toHaveTextContent(
+        /no products match/i,
+      );
+    });
+  });
+
+  it('Escape closes the dropdown without adding to the cart', async () => {
+    const widget = makeProduct(3, {
+      id: 'p-widget',
+      sku: 'SKU-WIDGET',
+      name: 'Widget',
+      barcode: null,
+    });
+    const built = buildStub({ searchProducts: [widget] });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await user.type(screen.getByTestId('pos-product-search'), 'wid');
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-product-search-result-${widget.id}`),
+      ).toBeInTheDocument();
+    });
+
+    await user.keyboard('{Escape}');
+
+    expect(
+      screen.queryByTestId('pos-product-search-results'),
+    ).not.toBeInTheDocument();
+    // No cart row was added.
+    expect(
+      screen.queryByTestId(`pos-cart-row-${widget.id}`),
+    ).not.toBeInTheDocument();
+  });
+
+  it('Enter falls through to pos:scan when the search yields no match and the value matches the barcode shape', async () => {
+    const product = makeProduct(7, { barcode: 'BCBC7' });
+    const built = buildStub({
+      // Empty search results so the dropdown never matches; the
+      // Enter handler then hands off to the scanner fallback.
+      searchProducts: [],
+      scanByBarcode: { BCBC7: product },
+    });
+    installApi(built.stub);
+
+    const user = userEvent.setup();
+    render(<POSPage />);
+
+    await user.type(screen.getByTestId('pos-product-search'), 'BCBC7{Enter}');
+
+    await waitFor(() => {
+      expect(built.posScan).toHaveBeenCalledWith({ barcode: 'BCBC7' });
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId(`pos-cart-row-${product.id}`),
+      ).toBeInTheDocument();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Tests — totals
 // ---------------------------------------------------------------------------
 
 describe('<POSPage /> — totals', () => {
   it('updates totals when cart quantity is edited', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
 
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('10.00');
@@ -324,17 +576,17 @@ describe('<POSPage /> — totals', () => {
     // 1 × 100.00 @ 18% tax. 10% discount → discountAmount 10, taxableBase 90,
     // taxTotal 90 * 0.18 = 16.20, grand 90 + 16.20 = 106.20.
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '100.00',
       taxRate: '0.18',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
 
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('100.00');
@@ -354,17 +606,17 @@ describe('<POSPage /> — totals', () => {
 
   it('clamps a fixed discount > subtotal to the subtotal', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '50.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
 
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-subtotal')).toHaveTextContent('50.00');
@@ -388,17 +640,17 @@ describe('<POSPage /> — totals', () => {
 describe('<POSPage /> — payments', () => {
   it('keeps Finalize disabled when payment sum is below grand total', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '20.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('20.00');
     });
@@ -420,17 +672,17 @@ describe('<POSPage /> — payments', () => {
 
   it('enables Finalize once payments equal grand total', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '20.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent('20.00');
     });
@@ -453,7 +705,7 @@ describe('<POSPage /> — payments', () => {
 describe('<POSPage /> — successful finalize', () => {
   it('forwards the exact wire shape to pos:finalize and clears the cart on success', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -467,7 +719,7 @@ describe('<POSPage /> — successful finalize', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
@@ -477,8 +729,8 @@ describe('<POSPage /> — successful finalize', () => {
     render(<POSPage onFinalized={onFinalized} />);
 
     // Build a cart with quantity 2.
-    await scanBarcode({ user, barcode: 'BC-1' });
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await waitFor(() => {
       expect(
         screen.getByTestId(`pos-cart-row-${product.id}-quantity`),
@@ -553,7 +805,7 @@ describe('<POSPage /> — successful finalize', () => {
 describe('<POSPage /> — server error mapping', () => {
   it('marks the offending line and disables Finalize on OUT_OF_STOCK', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -561,7 +813,7 @@ describe('<POSPage /> — server error mapping', () => {
       Promise.resolve(Err('OUT_OF_STOCK', { productId: product.id })),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
@@ -569,7 +821,7 @@ describe('<POSPage /> — server error mapping', () => {
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-payment-add-cash'));
     await waitFor(() => {
       expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
@@ -598,7 +850,7 @@ describe('<POSPage /> — server error mapping', () => {
 
   it('renders the field name on a VALIDATION envelope', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -612,7 +864,7 @@ describe('<POSPage /> — server error mapping', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
@@ -620,7 +872,7 @@ describe('<POSPage /> — server error mapping', () => {
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-payment-add-cash'));
     await waitFor(() => {
       expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
@@ -647,7 +899,7 @@ describe('<POSPage /> — server error mapping', () => {
 
   it('renders the customer-or-product copy on FK_VIOLATION', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -655,7 +907,7 @@ describe('<POSPage /> — server error mapping', () => {
       Promise.resolve(Err('FK_VIOLATION', { reason: 'not_found' })),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
@@ -663,7 +915,7 @@ describe('<POSPage /> — server error mapping', () => {
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-payment-add-cash'));
     await waitFor(() => {
       expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
@@ -708,7 +960,7 @@ describe('<POSPage /> — customer attach', () => {
 
   it('sends customerId on finalize when a customer is selected from the picker', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -726,7 +978,7 @@ describe('<POSPage /> — customer attach', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       customers: [customer],
       finalize,
     });
@@ -778,7 +1030,7 @@ describe('<POSPage /> — customer attach', () => {
 
   it('sends customerId: null on finalize when the customer is cleared (walk-in)', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -793,7 +1045,7 @@ describe('<POSPage /> — customer attach', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       customers: [customer],
       finalize,
     });
@@ -836,7 +1088,7 @@ describe('<POSPage /> — customer attach', () => {
 
   it('walk-in default sends customerId: null when no customer is ever picked', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -850,7 +1102,7 @@ describe('<POSPage /> — customer attach', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
@@ -874,7 +1126,7 @@ describe('<POSPage /> — customer attach', () => {
 
   it('inline + New customer creates and attaches the customer mid-checkout', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -897,7 +1149,7 @@ describe('<POSPage /> — customer attach', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       customersUpsert,
       finalize,
     });
@@ -946,7 +1198,7 @@ describe('<POSPage /> — customer attach', () => {
 
   it('surfaces a permission-denied error inline when customers:upsert returns FORBIDDEN', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -954,7 +1206,7 @@ describe('<POSPage /> — customer attach', () => {
       Promise.resolve(Err('FORBIDDEN', { reason: 'rbac' })),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       customersUpsert,
     });
     installApi(built.stub);
@@ -962,7 +1214,7 @@ describe('<POSPage /> — customer attach', () => {
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-customer-new'));
     await user.type(screen.getByTestId('pos-customer-new-name'), 'Anyone');
     await user.click(screen.getByTestId('pos-customer-new-submit'));
@@ -996,17 +1248,17 @@ describe('<POSPage /> — keyboard shortcuts', () => {
 
   it('F4 adds a cash payment for the running balance', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '20.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
 
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await waitFor(() => {
       expect(screen.getByTestId('pos-totals-grand')).toHaveTextContent(
         '20.00',
@@ -1031,16 +1283,16 @@ describe('<POSPage /> — keyboard shortcuts', () => {
 
   it('F5 adds a card payment and F6 adds a mobile payment', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '15.00',
       taxRate: '0.00',
     });
-    const built = buildStub({ scanByBarcode: { 'BC-1': product } });
+    const built = buildStub({ scanByBarcode: { 'BCBC1': product } });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     (document.activeElement as HTMLElement | null)?.blur();
 
     fireFKey('F5');
@@ -1073,7 +1325,7 @@ describe('<POSPage /> — keyboard shortcuts', () => {
 
   it('F9 fires finalize when canFinalize is true', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
@@ -1087,14 +1339,14 @@ describe('<POSPage /> — keyboard shortcuts', () => {
       ),
     );
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-payment-add-cash'));
     await waitFor(() => {
       expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();
@@ -1123,21 +1375,21 @@ describe('<POSPage /> — keyboard shortcuts', () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
-  it('F1 focuses the scanner input', async () => {
+  it('F1 focuses the product search input', async () => {
     const built = buildStub({});
     installApi(built.stub);
 
     render(<POSPage />);
     (document.activeElement as HTMLElement | null)?.blur();
     expect(document.activeElement).not.toBe(
-      screen.getByTestId('pos-scanner-input'),
+      screen.getByTestId('pos-product-search'),
     );
 
     fireFKey('F1');
 
     await waitFor(() => {
       expect(document.activeElement).toBe(
-        screen.getByTestId('pos-scanner-input'),
+        screen.getByTestId('pos-product-search'),
       );
     });
   });
@@ -1158,22 +1410,22 @@ describe('<POSPage /> — keyboard shortcuts', () => {
     });
   });
 
-  it('F-keys are ignored while a non-scanner input is focused', async () => {
+  it('F-keys are ignored while a non-search input is focused', async () => {
     const product = makeProduct(1, {
-      barcode: 'BC-1',
+      barcode: 'BCBC1',
       sellPrice: '10.00',
       taxRate: '0.00',
     });
     const finalize = vi.fn();
     const built = buildStub({
-      scanByBarcode: { 'BC-1': product },
+      scanByBarcode: { 'BCBC1': product },
       finalize,
     });
     installApi(built.stub);
 
     const user = userEvent.setup();
     render(<POSPage />);
-    await scanBarcode({ user, barcode: 'BC-1' });
+    await scanBarcode({ user, barcode: 'BCBC1' });
     await user.click(screen.getByTestId('pos-payment-add-cash'));
     await waitFor(() => {
       expect(screen.getByTestId('pos-finalize')).not.toBeDisabled();

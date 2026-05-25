@@ -135,7 +135,8 @@ export function Shell(): ReactElement {
       data-testid="app-shell"
       style={{
         fontFamily: 'system-ui, sans-serif',
-        minHeight: '100vh',
+        minHeight: '100%',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
       }}
