@@ -1,0 +1,191 @@
+# electron-builder configuration (Phase 16, task 16.1).
+#
+# Produces self-contained installers per OS:
+#   - Windows: NSIS installer (.exe)               — primary V1 target.
+#   - macOS:   DMG (x64 + arm64)                   — secondary, unsigned.
+#   - Linux:   AppImage (x64)                      — secondary, unsigned.
+#
+# Code signing and auto-update are deferred per design.md ("Build and
+# Packaging"). V1 ships unsigned and the README documents the OS-level
+# "open anyway" steps (macOS Gatekeeper, Windows SmartScreen).
+#
+# What ships inside the installer (design.md "What ships inside the
+# installer", Req 14.1, 14.5, 14.6, 14.7, 14.9):
+#
+#   1. The Electron runtime (Chromium + Node), packaged by electron-
+#      builder per OS as standard.
+#   2. The compiled application code (main + preload + renderer) under
+#      `dist/`.
+#   3. The Prisma client + the generated client artifacts under
+#      `node_modules/@prisma/client/**` and `node_modules/.prisma/**`,
+#      plus the `prisma/schema.prisma` file referenced by the client.
+#   4. The bundled SQLite engine — `better-sqlite3`'s native `.node`
+#      binary, which Prisma loads at runtime. `asarUnpack` (below) is
+#      required because Node `require` cannot `dlopen` a `.node` file
+#      from inside an asar archive on every OS.
+#   5. The Prisma migrations folder (`prisma/migrations/**`), shipped
+#      via `extraResources` so `prisma migrate deploy` (invoked from
+#      `src/main/bootstrap/first-run.ts`) can read them at runtime.
+#   6. The seeded `shop.db.template` (built by `scripts/build-db-template.ts`
+#      and committed/regenerated to `resources/shop.db.template`),
+#      shipped via `extraResources` and copied to `<userData>/shop.db`
+#      on first run by `ensureUserDb` (Req 14.2, 14.8).
+#
+# Per-OS native binary handling (design.md "Why better-sqlite3 and the
+# bundling tradeoff"): native modules (`better-sqlite3`, the Prisma
+# engine binaries) are rebuilt against the bundled Electron Node ABI on
+# the target OS by electron-builder's `app-builder` postinstall step.
+# Each CI matrix entry runs `electron-builder` natively on its target
+# OS so the produced binary matches the runtime exactly. Property 18
+# (task 15.4.1) consumes the resulting installers.
+#
+# CI matrix entries (one per supported target):
+#   - Windows x64    -> npm run dist:win    -> release/*.exe (nsis)
+#   - macOS  x64+arm64 -> npm run dist:mac  -> release/*.dmg
+#   - Linux  x64     -> npm run dist:linux  -> release/*.AppImage
+#
+# References:
+#   - design.md "Build and Packaging"
+#   - tasks.md task 16.1 (this file)
+#   - tasks.md task 15.4.1 (Property 18 — bundled-binary self-containment)
+# yaml-language-server: $schema=https://json.schemastore.org/electron-builder
+
+appId: com.coreretailerp.desktop
+productName: Core Retail ERP
+copyright: "Copyright © ${author}"
+
+# Output directory for produced installer artifacts. Listed in
+# `.gitignore` so installer binaries are not committed.
+directories:
+  output: release
+  buildResources: resources
+
+# Files that land inside `app.asar`.
+#
+# We intentionally include only the bundles produced by `electron-vite
+# build` plus the Prisma client + generated artifacts the main process
+# loads at runtime. `electron-builder` already includes `package.json`
+# automatically, but we list it explicitly to avoid surprise drops if
+# upstream defaults change.
+files:
+  - "dist/main/**"
+  - "dist/preload/**"
+  - "dist/renderer/**"
+  - "package.json"
+  - "prisma/schema.prisma"
+  - "node_modules/.prisma/**"
+  - "node_modules/@prisma/client/**"
+
+# `extraResources` lands under `<install>/resources/` and is reachable
+# at runtime via `process.resourcesPath`.
+#
+# Two payloads:
+#
+#   - `prisma/migrations` — shipped so `prisma migrate deploy` (run from
+#     `src/main/bootstrap/first-run.ts#runMigrations`) can apply pending
+#     migrations against `<userData>/shop.db` on every launch. The path
+#     `prisma/migrations` is preserved so the schema's relative
+#     migrations pointer (`prisma/migrations/...`) resolves correctly
+#     against the schema file shipped inside the asar.
+#
+#   - `resources/shop.db.template` -> `shop.db.template` — the
+#     pre-migrated, seeded baseline DB. `resolveTemplatePath()` in
+#     `src/main/index.ts` reads it via
+#     `join(process.resourcesPath, 'shop.db.template')`, so the
+#     mapping above places it exactly where the bootstrap expects it.
+#     Note the source is `resources/shop.db.template` (the path emitted
+#     by `npm run db:template`); the design sketch mentioned
+#     `prisma/shop.db.template` but the actual build script writes the
+#     artifact under `resources/`.
+extraResources:
+  - from: "prisma/migrations"
+    to: "prisma/migrations"
+    filter:
+      - "**/*"
+  - from: "resources/shop.db.template"
+    to: "shop.db.template"
+
+# Native modules that must be readable as files on disk (not from
+# inside `app.asar`). Node's `require` cannot `dlopen` a `.node` binary
+# from inside an asar archive on every OS, so electron-builder unpacks
+# these paths into `app.asar.unpacked/` at install time.
+#
+#   - `better-sqlite3` ships the SQLite native binary (`.node`) used by
+#     the Prisma driver path the design selects.
+#   - `@prisma/engines` carries the Prisma query/migration engine
+#     binaries (`.node` on supported platforms; some are spawned as
+#     standalone executables by the migration engine).
+#   - `@prisma/client/runtime` carries platform-specific WASM and
+#     native fallbacks loaded at runtime.
+asarUnpack:
+  - "node_modules/better-sqlite3/**"
+  - "node_modules/@prisma/engines/**"
+  - "node_modules/@prisma/client/runtime/**"
+
+# Rebuild native dependencies against the bundled Electron Node ABI on
+# the build host. electron-builder's `app-builder` postinstall step
+# (which delegates to `@electron/rebuild`) handles this automatically
+# when `nodeGypRebuild` is true; we pin it explicitly so a future
+# default change does not break the matrix.
+nodeGypRebuild: false
+npmRebuild: true
+buildDependenciesFromSource: false
+
+# ---------------------------------------------------------------------
+# Per-OS targets
+# ---------------------------------------------------------------------
+
+# Windows is the primary V1 target. NSIS produces a single `.exe`
+# installer that the operator runs; `oneClick: false` shows the install
+# wizard so the operator can pick an install directory (the design's
+# expectation of zero-configuration covers DB location, not install
+# location).
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: "${productName}-${version}-win-${arch}.${ext}"
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  deleteAppDataOnUninstall: false
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: ${productName}
+
+# macOS is a secondary target in V1. Built unsigned per design ("Code
+# signing: deferred"); README documents the Gatekeeper override step.
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  category: public.app-category.business
+  hardenedRuntime: false
+  gatekeeperAssess: false
+  identity: null
+  artifactName: "${productName}-${version}-mac-${arch}.${ext}"
+
+dmg:
+  writeUpdateInfo: false
+
+# Linux is a secondary target in V1. AppImage so the operator does not
+# need elevated privileges or a package manager interaction.
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Office
+  artifactName: "${productName}-${version}-linux-${arch}.${ext}"
+
+# Auto-update is deferred per design ("Auto-update: deferred"). V1 is
+# manual reinstall over the previous version; the user's `<userData>`
+# is preserved across reinstalls and `prisma migrate deploy` is
+# idempotent.
+publish: null
