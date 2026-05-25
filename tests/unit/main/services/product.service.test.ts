@@ -61,14 +61,22 @@ const mockState = vi.hoisted(() => {
     userId: string | null;
     timestamp: Date;
   }
+  interface MockJournalEntry {
+    id: string;
+    opType: string;
+    payload: string;
+    timestamp: Date;
+  }
 
   const state = {
     products: [] as MockProduct[],
     inventories: [] as MockInventory[],
     categories: [] as MockCategory[],
     auditLogs: [] as MockAuditLog[],
+    journalEntries: [] as MockJournalEntry[],
     nextProductId: 0,
     nextAuditId: 0,
+    nextJournalId: 0,
   };
 
   return {
@@ -78,8 +86,10 @@ const mockState = vi.hoisted(() => {
       state.inventories = [];
       state.categories = [];
       state.auditLogs = [];
+      state.journalEntries = [];
       state.nextProductId = 0;
       state.nextAuditId = 0;
+      state.nextJournalId = 0;
     },
   };
 });
@@ -404,6 +414,26 @@ vi.mock('@main/db/prisma.js', async () => {
     return Promise.resolve({ ...row });
   }
 
+  // Mirrors `prisma.journalEntry.create` for the price-change branch
+  // (task 11.4 — every business `$transaction` ends with one
+  // `journal_entries` insert). Mutations live in-memory alongside the
+  // audit log so the tx snapshot/rollback covers both append-only
+  // tables uniformly.
+  function journalEntryCreateImpl({
+    data,
+  }: {
+    data: { opType: string; payload: string };
+  }): Promise<unknown> {
+    const row = {
+      id: `journal-${state.nextJournalId++}`,
+      opType: data.opType,
+      payload: data.payload,
+      timestamp: new Date(),
+    };
+    state.journalEntries.push(row);
+    return Promise.resolve({ ...row });
+  }
+
   // The product service uses Prisma.sql for $queryRaw. The template
   // function returns an opaque object; our mock ignores it entirely
   // and computes the low-stock set against the mock inventories +
@@ -423,30 +453,34 @@ vi.mock('@main/db/prisma.js', async () => {
   // Transaction handle exposed to `$transaction` callbacks. The
   // surface mirrors what the service touches inside its
   // `$transaction` blocks: `product.create` + `inventory.create` for
-  // create-path atomicity, and `product.update` + `auditLog.create`
-  // for the price-change audit path (task 4.3). Mutations applied
-  // through the tx hit the same in-memory state so a successful
-  // commit is observable; this mock does not roll back on throw, but
-  // the service's error mapping is exercised independently in the
-  // surrounding tests.
+  // create-path atomicity, and `product.update` + `auditLog.create` +
+  // `journalEntry.create` for the price-change audit + journal path
+  // (tasks 4.3 + 11.4). Mutations applied through the tx hit the
+  // same in-memory state so a successful commit is observable; this
+  // mock does not roll back on throw, but the service's error
+  // mapping is exercised independently in the surrounding tests.
   const tx = {
     product: { create: createImpl, update: updateImpl, findUnique: findUniqueImpl },
     inventory: { create: inventoryCreateImpl },
     auditLog: { create: auditLogCreateImpl },
+    journalEntry: { create: journalEntryCreateImpl },
   };
 
   async function $transaction<T>(cb: (txArg: typeof tx) => Promise<T>): Promise<T> {
     // Snapshot mutable state so an in-tx throw rolls everything back —
     // matching Prisma's real `$transaction` semantics. The product
-    // service's price-change audit path relies on this: a failed
-    // `tx.product.update` MUST take the in-tx `tx.auditLog.create`
-    // row down with it.
+    // service's price-change audit + journal path relies on this: a
+    // failed `tx.product.update` MUST take both the in-tx
+    // `tx.auditLog.create` AND the `tx.journalEntry.create` rows
+    // down with it.
     const snapshot = {
       products: state.products.map((p) => ({ ...p })),
       inventories: state.inventories.map((i) => ({ ...i })),
       auditLogs: state.auditLogs.map((a) => ({ ...a })),
+      journalEntries: state.journalEntries.map((j) => ({ ...j })),
       nextProductId: state.nextProductId,
       nextAuditId: state.nextAuditId,
+      nextJournalId: state.nextJournalId,
     };
     try {
       return await cb(tx);
@@ -454,8 +488,10 @@ vi.mock('@main/db/prisma.js', async () => {
       state.products = snapshot.products;
       state.inventories = snapshot.inventories;
       state.auditLogs = snapshot.auditLogs;
+      state.journalEntries = snapshot.journalEntries;
       state.nextProductId = snapshot.nextProductId;
       state.nextAuditId = snapshot.nextAuditId;
+      state.nextJournalId = snapshot.nextJournalId;
       throw err;
     }
   }
@@ -1202,6 +1238,47 @@ describe('ProductService.upsert (update) — price-change auditing', () => {
     expect(mockState.state.auditLogs[0]!.userId).toBe('user-acting-42');
   });
 
+  it('writes one price.change journal entry alongside the audit row (Req 10.4)', async () => {
+    expect(mockState.state.journalEntries).toHaveLength(0);
+    unwrapOk(
+      await ProductService.upsert(
+        { ...seedInput, id: 'p-audit', buyPrice: '12.50', sellPrice: '20.00' },
+        { userId: 'user-acting-7' },
+      ),
+    );
+    // Audit and journal both fire, exactly once each — every business
+    // `$transaction` ends with one `journal_entries` insert (task 11.4).
+    expect(mockState.state.auditLogs).toHaveLength(1);
+    expect(mockState.state.journalEntries).toHaveLength(1);
+
+    const journal = mockState.state.journalEntries[0]!;
+    expect(journal.opType).toBe('price.change');
+
+    const payload = JSON.parse(journal.payload) as {
+      productId: string;
+      previous: { buyPrice: string; sellPrice: string };
+      next: { buyPrice: string; sellPrice: string };
+      userId: string;
+      timestamp: string;
+    };
+    expect(payload.productId).toBe('p-audit');
+    expect(payload.previous).toEqual({ buyPrice: '10', sellPrice: '15' });
+    expect(payload.next).toEqual({ buyPrice: '12.5', sellPrice: '20' });
+    expect(payload.userId).toBe('user-acting-7');
+    expect(typeof payload.timestamp).toBe('string');
+    expect(() => new Date(payload.timestamp).toISOString()).not.toThrow();
+  });
+
+  it('writes NO journal entry when neither price changes', async () => {
+    unwrapOk(
+      await ProductService.upsert(
+        { ...seedInput, id: 'p-audit', name: 'Renamed Only' },
+        { userId: 'u-admin' },
+      ),
+    );
+    expect(mockState.state.journalEntries).toHaveLength(0);
+  });
+
   it('writes no audit row when the update fails on FK_VIOLATION (atomic rollback contract)', async () => {
     const result = await ProductService.upsert(
       { ...seedInput, id: 'p-audit', categoryId: 'cat-missing', buyPrice: '99.00' },
@@ -1210,8 +1287,10 @@ describe('ProductService.upsert (update) — price-change auditing', () => {
     expect(result.ok).toBe(false);
     // The fetch happens before the transaction, but the in-tx update
     // throws before the audit row is committed. The service returns
-    // a mapped error envelope; the audit log stays empty.
+    // a mapped error envelope; both append-only logs stay empty
+    // (atomic rollback covers the journal entry too — task 11.4).
     expect(mockState.state.auditLogs).toHaveLength(0);
+    expect(mockState.state.journalEntries).toHaveLength(0);
   });
 
   it('writes no audit row when the update target id is missing (FK_VIOLATION not_found)', async () => {
@@ -1225,5 +1304,6 @@ describe('ProductService.upsert (update) — price-change auditing', () => {
       expect(result.error.details).toEqual({ reason: 'not_found' });
     }
     expect(mockState.state.auditLogs).toHaveLength(0);
+    expect(mockState.state.journalEntries).toHaveLength(0);
   });
 });

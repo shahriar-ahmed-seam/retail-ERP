@@ -7,6 +7,8 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
+import { appendOnlyRestrictedSyntax } from './eslint-rules/append-only.mjs';
+
 /**
  * ESLint flat config (ESLint 9, typescript-eslint 8).
  *
@@ -41,6 +43,10 @@ export default tseslint.config(
       '**/*.db',
       // ESLint's own config files do not need to be linted with type-aware rules.
       'eslint.config.mjs',
+      // Plain ES modules consumed by `eslint.config.mjs` itself —
+      // not part of any tsconfig project (Req 10.5 / 13.4 selector
+      // definitions).
+      'eslint-rules/**',
     ],
   },
 
@@ -173,6 +179,28 @@ export default tseslint.config(
       globals: {
         ...globals.node,
       },
+    },
+  },
+
+  // 6a. Append-only guard for `journal_entries` and `audit_logs`
+  //     (task 11.5, Req 10.5 + 13.4). The journal and audit logs are
+  //     append-only by contract — no service method may call
+  //     `update`, `delete`, `updateMany`, or `deleteMany` on the
+  //     `journalEntry` or `auditLog` Prisma delegates anywhere under
+  //     `src/`. The rule is enforced statically via `no-restricted-syntax`
+  //     so the build fails before the call ever reaches runtime.
+  //
+  //     The selectors live in `eslint-rules/append-only.mjs` so the
+  //     build and the unit test under
+  //     `tests/unit/main/eslint/append-only-journal.test.ts` use one
+  //     source of truth. Tests under `tests/` may legitimately read
+  //     from the append-only tables (counting rows after a recovery
+  //     replay, for example), so the guard is intentionally scoped to
+  //     `src/**` only.
+  {
+    files: ['src/**/*.ts', 'src/**/*.tsx'],
+    rules: {
+      'no-restricted-syntax': ['error', ...appendOnlyRestrictedSyntax],
     },
   },
 

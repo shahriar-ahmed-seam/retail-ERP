@@ -52,14 +52,20 @@
 // service opens a `$transaction` and inserts an `AuditLog` row of
 // type `price.change` carrying the previous and new prices, the
 // acting user, and the entity id, BEFORE applying the product
-// update. Both writes commit atomically — if the update fails
-// (unique violation, FK violation, missing record), the audit row
-// rolls back with it, so the audit log only reflects price changes
-// that actually persisted. When neither price changes, no audit row
-// is written and the update runs as a single Prisma write.
+// update. The same transaction also appends one `JournalEntry` of
+// `opType: 'price.change'` with a replay-friendly snapshot
+// (productId + previous/new prices + actor + ISO timestamp) so the
+// recovery flow can reproduce the change after a snapshot restore
+// (Req 10.4 — every business transaction ends with one
+// `journal_entries` insert). All three writes commit atomically — if
+// the update fails (unique violation, FK violation, missing record),
+// the audit and journal rows roll back with it, so neither log
+// reflects a price change that did not persist. When neither price
+// changes, no audit or journal row is written and the update runs
+// as a single Prisma write.
 //
 // Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.5, 7 (read-only access),
-//            13.1.
+//            10.4, 13.1.
 
 import { Prisma, type Inventory, type Product } from '@prisma/client';
 
@@ -753,11 +759,17 @@ export const ProductService = {
 
       let updated: ProductWithRelations;
       if (buyPriceChanged || sellPriceChanged) {
-        // Atomic audit + update. The `AuditLog.previous`/`next`
-        // payloads carry both prices regardless of which one moved
-        // so a downstream review can always see the full pricing
-        // snapshot at each side of the change without joining
-        // against a separate history.
+        // Atomic audit + journal + update. The `AuditLog.previous`/
+        // `next` payloads carry both prices regardless of which one
+        // moved so a downstream review can always see the full
+        // pricing snapshot at each side of the change without
+        // joining against a separate history. The matching
+        // `JournalEntry` row carries the same snapshot in a
+        // replay-friendly shape (productId + previous/new prices +
+        // actor + ISO timestamp) so the recovery flow described in
+        // design.md can reproduce the price change after a snapshot
+        // restore (Req 10.4 — every business transaction ends with
+        // one `journal_entries` insert).
         const previous = JSON.stringify({
           buyPrice: existing.buyPrice.toString(),
           sellPrice: existing.sellPrice.toString(),
@@ -781,6 +793,33 @@ export const ProductService = {
             where: { id: productId },
             data,
             include: PRODUCT_INCLUDE,
+          });
+          // Journal row (Req 10.4). Symmetric to the `sale`,
+          // `purchase`, and `adjustment` payloads written by the
+          // other services: a JSON snapshot sufficient to replay
+          // the event through the same domain method during
+          // snapshot recovery. Decimals are stringified so the
+          // payload survives JSON round-tripping without precision
+          // loss; the embedded `timestamp` preserves the wall-clock
+          // moment across schema migrations even if the row's own
+          // `timestamp` column changes shape.
+          await tx.journalEntry.create({
+            data: {
+              opType: 'price.change',
+              payload: JSON.stringify({
+                productId,
+                previous: {
+                  buyPrice: existing.buyPrice.toString(),
+                  sellPrice: existing.sellPrice.toString(),
+                },
+                next: {
+                  buyPrice: newBuyPrice.toString(),
+                  sellPrice: newSellPrice.toString(),
+                },
+                userId: ctx.userId,
+                timestamp: new Date().toISOString(),
+              }),
+            },
           });
           return row;
         });

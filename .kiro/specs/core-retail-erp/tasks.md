@@ -593,11 +593,11 @@ Stack:
   - After every snapshot, keep the N most recent files (read N from `Setting 'backup.retentionDays'`, default 14); delete older
   - _Requirements: 10.3_
 
-- [ ] 11.4 Journal entry integration audit
+- [x] 11.4 Journal entry integration audit
   - Verify (and add where missing) that every business `$transaction` (sale, purchase, adjustment, price.change, role.change) ends with one `journal_entries` insert carrying a JSON payload sufficient to replay the event
   - _Requirements: 10.4, 10.5_
 
-- [ ] 11.5 Append-only static guarantee
+- [x] 11.5 Append-only static guarantee
   - Add a lint rule (custom ESLint rule or grep-based check in CI) that fails the build on any reference to `prisma.journalEntry.update`, `prisma.journalEntry.delete`, `prisma.auditLog.update`, or `prisma.auditLog.delete` within `src/`
   - _Requirements: 10.5, 13.4_
 
