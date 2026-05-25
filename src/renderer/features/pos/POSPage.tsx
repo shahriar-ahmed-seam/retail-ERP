@@ -106,19 +106,10 @@ const PRODUCT_SEARCH_DEBOUNCE_MS = 200;
 const PRODUCT_SEARCH_PAGE_SIZE = 8;
 
 /**
- * Brief settle delay used by the scanner fallback's auto-submit
- * branch. Real USB scanners terminate the keystroke burst with a
- * CR/LF that triggers the form's native submit; this fallback covers
- * cases where the scanner is configured without a terminator and the
- * cashier is manually keying a barcode.
- */
-const SCANNER_SETTLE_DELAY_MS = 200;
-
-/**
- * Minimum length before the auto-submit settle path will fire. Below
- * this threshold the input is more likely to be a partial keystroke
- * burst than a complete barcode; the cashier still has the Enter key
- * and the burst-terminator path.
+ * Minimum length the typed value must reach before the Enter-key
+ * scanner fallback considers it a barcode candidate. Below this
+ * threshold an Enter press never triggers `pos:scan`, even when the
+ * dropdown has no match — the user is mid-typing.
  */
 const SCANNER_MIN_BARCODE_LENGTH = 4;
 
@@ -590,28 +581,23 @@ export function POSPage({ onFinalized }: POSPageProps = {}): ReactElement {
     };
   }, [api, debouncedQuery]);
 
-  // ----- Settle-delay scanner fallback ---------------------------------
-  // Fires after the search input has been idle for
-  // `SCANNER_SETTLE_DELAY_MS` AND the value matches the common
-  // alphanumeric barcode shape AND no live dropdown match exists.
-  // Real USB scanners emit a CR/LF terminator that flows through
-  // the Enter handler below; this branch only fires for scanners
-  // configured without a terminator. Live dropdown matches always
-  // win over the scanner fallback so a cashier typing "wid" never
-  // races against `pos:scan('wid')`.
-  useEffect(() => {
-    const trimmed = searchQuery.trim();
-    if (trimmed.length < SCANNER_MIN_BARCODE_LENGTH) return undefined;
-    if (!BARCODE_SHAPE.test(trimmed)) return undefined;
-    if (searchResults.length > 0) return undefined;
-    if (isSearching) return undefined;
-    const handle = setTimeout(() => {
-      void performScan(trimmed);
-    }, SCANNER_SETTLE_DELAY_MS);
-    return () => {
-      clearTimeout(handle);
-    };
-  }, [searchQuery, searchResults, isSearching, performScan]);
+  // ----- Settle-delay scanner fallback (REMOVED) -----------------------
+  // The auto-settle timer used to fire `pos:scan` after the search
+  // input had been idle for ~200ms when the value looked alphanumeric.
+  // It was originally meant to support wedge scanners configured
+  // WITHOUT an Enter terminator, but in practice it raced against the
+  // 250ms search debounce: typing a 4th character would settle before
+  // the search query advanced, the previous results window emptied
+  // briefly, and the fallback fired `pos:scan('wire')` mid-keystroke.
+  // For shops without a scanner this turned every typed word into a
+  // failed scan.
+  //
+  // Real USB scanners almost universally emit a CR/LF terminator (it
+  // is the default in every consumer-grade firmware), so the Enter-key
+  // fallback in `handleSearchKeyDown` is sufficient. Operators with an
+  // unusual terminator-less scanner can either reconfigure it or wait
+  // a moment and press Enter manually. The trade-off is firmly in
+  // favour of typing-first cashier flow.
 
   // ----- Search input handlers -----------------------------------------
   const selectSearchResult = useCallback(

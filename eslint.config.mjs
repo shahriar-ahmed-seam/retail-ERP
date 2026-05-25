@@ -47,6 +47,11 @@ export default tseslint.config(
       // not part of any tsconfig project (Req 10.5 / 13.4 selector
       // definitions).
       'eslint-rules/**',
+      // Local-only operator scripts (one-shot DB seeds, inspect
+      // helpers). Plain CommonJS, not part of any tsconfig project,
+      // so the type-aware linter cannot resolve them.
+      'scripts/**/*.cjs',
+      'scripts/**/*.mjs',
     ],
   },
 
