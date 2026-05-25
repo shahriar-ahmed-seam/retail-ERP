@@ -411,13 +411,13 @@ Stack:
   - Wire `pos:finalize` (Admin + Cashier)
   - _Requirements: 4.2, 4.3, 4.4, 4.5, 4.6, 4.9, 11.1, 12.2_
 
-- [ ] 7.5 POS UI — single-screen layout
+- [x] 7.5 POS UI — single-screen layout
   - `src/renderer/features/pos/POSPage.tsx`: scanner-focused input top, cart middle, totals + discount + customer attach right, payment panel bottom; reachable in one click from home
   - Scanner input keeps focus by default and re-focuses after every action
   - Cart row height ≥ 56px; payment buttons ≥ 80px
   - _Requirements: 4.1, 4.4, 4.5, 4.6, 14.3_
 
-- [ ] 7.6 POS UI — cart, discount, payment, customer attach, finalize
+- [x] 7.6 POS UI — cart, discount, payment, customer attach, finalize
   - Cart add/remove/quantity edit, fixed-amount or percentage discount input, cash/card/mobile split payments with running balance, optional customer attach (deferred wiring to Phase 9)
   - Out-of-stock errors render inline on offending cart line and disable finalize
   - _Requirements: 4.1, 4.4, 4.5, 4.6, 7.4_
