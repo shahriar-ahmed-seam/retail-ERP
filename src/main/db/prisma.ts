@@ -114,11 +114,17 @@ export const prisma: PrismaClient = cache.client;
  */
 async function applyPragmas(client: PrismaClient): Promise<void> {
   for (const statement of PRAGMA_STATEMENTS) {
-    // `$executeRawUnsafe` is required here because PRAGMA names are not
-    // bindable parameters in SQLite. The statement list is a frozen
-    // module-level constant, never user input, so there is no injection
-    // surface.
-    await client.$executeRawUnsafe(`PRAGMA ${statement};`);
+    // `$queryRawUnsafe` is used (not `$executeRawUnsafe`) because some
+    // SQLite PRAGMAs echo their result as a row — `journal_mode=WAL`
+    // returns the new mode (`'wal'`), which `$executeRawUnsafe` rejects
+    // with "Execute returned results, which is not allowed in SQLite."
+    // `$queryRawUnsafe` accepts both row-returning and rowless statements
+    // so the same loop handles every PRAGMA in `PRAGMA_STATEMENTS`.
+    //
+    // PRAGMA names are not bindable parameters in SQLite. The statement
+    // list is a frozen module-level constant, never user input, so there
+    // is no injection surface.
+    await client.$queryRawUnsafe(`PRAGMA ${statement};`);
   }
 }
 

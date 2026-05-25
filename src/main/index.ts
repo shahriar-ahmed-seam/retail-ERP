@@ -416,8 +416,17 @@ function sendMigrationProgress(
  * root's `resources/shop.db.template`.
  */
 function resolveTemplatePath(): string {
-  const packaged = join(process.resourcesPath ?? '', 'shop.db.template');
-  return packaged;
+  // Packaged: `process.resourcesPath` is the `resources/` directory under
+  // the installed application, and `extraResources` (electron-builder.yml)
+  // mapped `resources/shop.db.template` to `<resourcesPath>/shop.db.template`.
+  if (app.isPackaged) {
+    return join(process.resourcesPath, 'shop.db.template');
+  }
+  // Dev: `process.resourcesPath` points at Electron's own resource folder
+  // (e.g. `node_modules/electron/dist/resources/`), which never contains
+  // our template. Resolve against the repo root so a clean checkout that
+  // ran `npm run db:template` finds the file.
+  return join(app.getAppPath(), 'resources', 'shop.db.template');
 }
 
 /**
@@ -449,6 +458,19 @@ function resolveTemplatePath(): string {
  * Validates: Requirements 14.1, 14.2, 14.8, 14.9.
  */
 async function runFirstRunBootstrap(): Promise<boolean> {
+  // Dev mode (`npm run dev`): the developer already ran
+  // `prisma migrate dev` against `prisma/dev.db`, `.env` already
+  // points `DATABASE_URL` at that file, and the seed has been
+  // applied. The first-run bootstrap is a packaged-installer
+  // concern (Phase 16 task 16.2) — running it in dev would
+  // overwrite `<userData>/shop.db` with the bundled template on
+  // every launch and confuse the developer's working state.
+  // Skip it cleanly and let `bootstrapMain()` open Prisma against
+  // whatever DATABASE_URL the `.env` provided.
+  if (!app.isPackaged) {
+    return true;
+  }
+
   const userDataDir = app.getPath('userData');
   const templatePath = resolveTemplatePath();
   const repoCwd = app.getAppPath();
