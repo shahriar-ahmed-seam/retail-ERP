@@ -33,6 +33,11 @@ import { createRoot } from 'react-dom/client';
 import { App } from './App';
 import { MigrationProgressPage } from './features/setup';
 import { AuthProvider } from './lib/auth-context';
+// Global stylesheet — pins the renderer to a light color scheme and
+// removes outer (`html` / `body`) scrollbars so internal scroll
+// regions own their overflow. Imported here so every renderer entry
+// (main app + migration progress window) picks it up.
+import './styles/global.css';
 
 const container = document.getElementById('root');
 if (container === null) {
