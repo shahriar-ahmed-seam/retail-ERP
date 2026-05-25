@@ -21,6 +21,7 @@
 //                                          (task 7.4 will add pos:finalize)
 //   - …
 
+export { registerAuditHandlers } from './audit.js';
 export { registerAuthHandlers } from './auth.js';
 export { registerBackupHandlers } from './backup.js';
 export { registerCategoriesHandlers } from './categories.js';
@@ -32,3 +33,4 @@ export { registerPurchasesHandlers } from './purchases.js';
 export { registerReportsHandlers } from './reports.js';
 export { registerSettingsHandlers } from './settings.js';
 export { registerSuppliersHandlers } from './suppliers.js';
+export { registerUsersHandlers } from './users.js';

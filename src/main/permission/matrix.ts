@@ -39,12 +39,26 @@
  *   - Req 3.6 + Req 9.3: cashiers see the low-stock banner via
  *     `inventory:lowStockCount` and open the low-stock list via
  *     `reports:lowStock`.
- *   - Req 4.x: cashiers see *their own* sales history through
- *     `sales:list` / `sales:count`; the service (task 11.x) filters by
- *     `cashierId = session.userId` server-side. The matrix gates
- *     authorization, the service gates *which rows*.
  *
- * Validates: Requirements 1.5, 8.1, 8.2, 8.3, 8.4.
+ * **Phase 12, task 12.1.1:** every paginated list channel and its
+ * `*:count` companion is now explicitly registered against one of the
+ * two role tuples below — Admin-only for the historical / audit /
+ * purchasing surfaces (`sales`, `purchases`, `inventory_movements`,
+ * `audit`, `journal_entries`, `suppliers`) and Admin + Cashier for
+ * the read-only catalog / customer browse surfaces (`products`,
+ * `customers`). The earlier "cashiers see their own sales via
+ * `sales:list`" carve-out is dropped: the historical sales browser
+ * is an admin tool (Req 8.2), and a cashier's working surface is
+ * the live POS — not a backwards-looking ledger of their own
+ * receipts. Per-row scoping by `cashierId` is therefore no longer
+ * required and would be dead code.
+ *
+ * The Property 9 runtime exhaustiveness test (task 12.3) walks every
+ * `IpcContract` channel and asserts the matrix gate fires for every
+ * forbidden role, so the explicit registration here is what gives
+ * the property its source of truth.
+ *
+ * Validates: Requirements 1.5, 8.1, 8.2, 8.3, 8.4, 16.1.
  */
 
 import type { IpcChannel, IpcContract, SessionRole } from '@shared/ipc-contract';
@@ -130,11 +144,13 @@ export const RBAC: Readonly<Record<keyof IpcContract, readonly SessionRole[]>> =
   'inventory_movements:count': ADMIN_ONLY,
 
   // ----- Sales (read-only history) ----------------------------------------
-  // Cashiers see *their own* sales; the service filters by cashierId.
-  // The RBAC matrix only authorizes the channel; row-level scoping is
-  // service-layer (task 11.x).
-  'sales:list': ALL_ROLES,
-  'sales:count': ALL_ROLES,
+  // Sales history is an Admin-only audit/reporting surface (Req 8.2,
+  // task 12.1.1). The cashier-facing surface is the live POS screen;
+  // browsing the historical sales ledger is not part of the cashier
+  // workflow. Listed Admin-only here so Property 9 (task 12.3) sees a
+  // consistent denial path for cashiers.
+  'sales:list': ADMIN_ONLY,
+  'sales:count': ADMIN_ONLY,
 
   // ----- Customers --------------------------------------------------------
   // Cashiers attach customers to sales (Req 7.2) — including creating a

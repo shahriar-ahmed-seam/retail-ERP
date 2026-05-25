@@ -6,6 +6,7 @@ import { sessionStore } from '@main/auth/session-store.js';
 import { wireWindowSessionLifecycle } from '@main/auth/window-lifecycle.js';
 import { connect, disconnect } from '@main/db/index.js';
 import {
+  registerAuditHandlers,
   registerAuthHandlers,
   registerBackupHandlers,
   registerCategoriesHandlers,
@@ -17,6 +18,7 @@ import {
   registerReportsHandlers,
   registerSettingsHandlers,
   registerSuppliersHandlers,
+  registerUsersHandlers,
 } from '@main/ipc/handlers/index.js';
 import { bindIpcHandlers } from '@main/ipc/index.js';
 import { AuthService } from '@main/services/auth.service.js';
@@ -88,6 +90,8 @@ async function bootstrapMain(): Promise<void> {
   registerPosHandlers();
   registerSettingsHandlers();
   registerBackupHandlers();
+  registerAuditHandlers();
+  registerUsersHandlers();
   // Future handler groups (pos:finalize in task 7.4, …) plug in here.
   bindIpcHandlers(ipcMain);
 

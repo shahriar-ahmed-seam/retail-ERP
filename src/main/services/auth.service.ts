@@ -45,6 +45,7 @@
 
 import { randomUUID } from 'node:crypto';
 
+import { Prisma } from '@prisma/client';
 import bcrypt from 'bcrypt';
 
 import { sessionStore, type SenderId } from '@main/auth/session-store.js';
@@ -356,18 +357,6 @@ export const AuthService = {
   /**
    * Tear down the session bound to a renderer.
    *
-   * Parameter naming reconciliation: the task description in tasks.md
-   * lists this method as `logout(sessionId)`. In practice the session
-   * store is keyed by `senderId` (Phase 2, task 2.5) — Electron's
-   * `WebContents.id` for the renderer that called the IPC channel —
-   * because that is the only id available to the auth middleware on
-   * every other invoke. Mapping a sessionId back to a senderId would
-   * require iterating the store on every logout, and the result is
-   * always the renderer that issued the call. Taking the senderId
-   * directly from the handler's `event.sender.id` is both simpler
-   * and the only call shape consistent with the rest of the
-   * middleware stack.
-   *
    * The IPC handler (task 3.2) is therefore expected to call
    * `AuthService.logout(event.sender.id)` regardless of whatever
    * sessionId the renderer included in its request payload (the
@@ -383,5 +372,175 @@ export const AuthService = {
     // with the other (genuinely async) AuthService methods.
     sessionStore.clear(senderId);
     return Promise.resolve(Ok(undefined));
+  },
+
+  /**
+   * Assign a different role to an existing user (Phase 12, task 12.2).
+   *
+   * Behaviour:
+   *
+   *   1. Validate the request shape. Both `userId` and `roleId` are
+   *      required non-empty strings. Either failure returns
+   *      `Err('VALIDATION', { field })` so the renderer can mark the
+   *      offending input.
+   *
+   *   2. Run the entire change inside ONE `prisma.$transaction`:
+   *        a. Re-read the target user (with their current role) so the
+   *           audit row's `previous` snapshot is accurate. Missing
+   *           target → `Err('FK_VIOLATION', { reason: 'not_found',
+   *           field: 'userId' })`.
+   *        b. Re-read the target role so the audit row's `next`
+   *           snapshot carries the role name (not just the id).
+   *           Missing role → `Err('FK_VIOLATION', { reason:
+   *           'not_found', field: 'roleId' })`. Narrow the role name
+   *           to the `'Admin' | 'Cashier'` literal so the wire DTO
+   *           stays well-typed; a stray name surfaces as
+   *           `Err('DB_INTEGRITY')`.
+   *        c. If the new role equals the current role, short-circuit
+   *           — return the user as-is and do NOT write an audit or
+   *           journal row. A no-op assignment is not an auditable
+   *           event.
+   *        d. `prisma.user.update` to the new `roleId`.
+   *        e. `prisma.auditLog.create` with `actionType: 'role.change'`,
+   *           `entityType: 'user'`, `entityId: targetUserId`, and
+   *           JSON-stringified `previous` / `next` snapshots that
+   *           carry both the `roleId` AND the `roleName` (so a future
+   *           audit viewer can render them without resolving id →
+   *           name on every row).
+   *        f. `prisma.journalEntry.create` with `opType:
+   *           'role.change'` and a payload that mirrors the audit
+   *           snapshot plus the acting user, the target user, and an
+   *           ISO timestamp captured at write time.
+   *
+   *   3. Return the freshly-updated `UserDTO` so the renderer's user
+   *      management view can refresh its row without an extra
+   *      `users:list` round trip.
+   *
+   * Atomicity (Req 8.5, 11.x): the user update, audit row, AND journal
+   * row all live inside the same `$transaction`, so either every write
+   * commits together or none of them do — which makes "role changed
+   * but no audit row" structurally impossible.
+   *
+   * Validates: Requirements 8.5, 13.2, 11.1.
+   */
+  async assignRole(
+    input: { readonly userId: string; readonly roleId: string },
+    ctx: { readonly userId: string },
+  ): Promise<Result<UserDTO>> {
+    if (typeof input.userId !== 'string' || input.userId.length === 0) {
+      return Err('VALIDATION', { field: 'userId' });
+    }
+    if (typeof input.roleId !== 'string' || input.roleId.length === 0) {
+      return Err('VALIDATION', { field: 'roleId' });
+    }
+    if (typeof ctx.userId !== 'string' || ctx.userId.length === 0) {
+      // Defence-in-depth: the IPC router only invokes this method
+      // with a bound session, so an empty actor id signals a misuse
+      // rather than a renderer-side validation failure.
+      return Err('INTERNAL', { reason: 'missing_actor' });
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        // Step 2a — read the target user with their current role so
+        // the audit `previous` snapshot is honest.
+        const target = await tx.user.findUnique({
+          where: { id: input.userId },
+          include: { role: true },
+        });
+        if (target === null) {
+          return Err('FK_VIOLATION', { reason: 'not_found', field: 'userId' });
+        }
+
+        // Step 2b — read the new role. Doing it inside the tx means a
+        // role deleted between the renderer's load and submit fails
+        // the assignment instead of silently writing a dangling FK.
+        const nextRole = await tx.role.findUnique({ where: { id: input.roleId } });
+        if (nextRole === null) {
+          return Err('FK_VIOLATION', { reason: 'not_found', field: 'roleId' });
+        }
+
+        const nextRoleName = narrowSessionRole(nextRole.name);
+        if (nextRoleName === null) {
+          // A role row outside `Admin | Cashier` indicates a forward-
+          // incompatible migration; refuse the assignment rather than
+          // mint a UserDTO with an unknown role label.
+          return Err('DB_INTEGRITY', { reason: 'unknown_role', name: nextRole.name });
+        }
+
+        const previousRoleName = narrowSessionRole(target.role.name);
+        if (previousRoleName === null) {
+          return Err('DB_INTEGRITY', { reason: 'unknown_role', name: target.role.name });
+        }
+
+        // Step 2c — no-op short-circuit. Same role on both sides ⇒
+        // return the user as-is, no audit row, no journal row.
+        if (target.roleId === input.roleId) {
+          return Ok(toUserDTO(target, previousRoleName));
+        }
+
+        // Step 2d — flip the user's roleId.
+        const updated = await tx.user.update({
+          where: { id: input.userId },
+          data: { roleId: input.roleId },
+        });
+
+        // Step 2e — append the audit row (Req 8.5, 13.2). Both
+        // snapshots carry `{ roleId, roleName }` so the audit viewer
+        // can render the change without an extra Role lookup.
+        const previousSnapshot = {
+          roleId: target.roleId,
+          roleName: previousRoleName,
+        } as const;
+        const nextSnapshot = {
+          roleId: nextRole.id,
+          roleName: nextRoleName,
+        } as const;
+        await tx.auditLog.create({
+          data: {
+            actionType: 'role.change',
+            entityType: 'user',
+            entityId: target.id,
+            previous: JSON.stringify(previousSnapshot),
+            next: JSON.stringify(nextSnapshot),
+            userId: ctx.userId,
+          },
+        });
+
+        // Step 2f — append the journal row (Req 10.4). The payload
+        // contains everything a replay needs: target user, both
+        // role snapshots, the acting user, and an ISO timestamp
+        // captured at write time. The row's own `timestamp` column
+        // also defaults to `now()`, but embedding it in the payload
+        // preserves it across schema migrations.
+        await tx.journalEntry.create({
+          data: {
+            opType: 'role.change',
+            payload: JSON.stringify({
+              targetUserId: target.id,
+              previousRole: previousSnapshot,
+              newRole: nextSnapshot,
+              userId: ctx.userId,
+              timestamp: new Date().toISOString(),
+            }),
+          },
+        });
+
+        return Ok(toUserDTO(updated, nextRoleName));
+      });
+    } catch (err) {
+      // Prisma's `P2025` covers race conditions where the user (or
+      // role) was deleted between the in-tx read and the update.
+      // Without this map the wire envelope would be `INTERNAL` which
+      // is misleading — the request is structurally valid, the
+      // referenced row simply does not exist anymore.
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2025'
+      ) {
+        return Err('FK_VIOLATION', { reason: 'not_found' });
+      }
+      throw err;
+    }
   },
 } as const;

@@ -131,9 +131,6 @@ const CASHIER_ALLOW: readonly IpcChannel[] = [
   'customers:count',
   'customers:upsert',
   'customers:detail',
-  // Their own sales history (service filters rows by cashierId).
-  'sales:list',
-  'sales:count',
   // Low-stock banner + list page reachable from it.
   'inventory:lowStockCount',
   'reports:lowStock',
@@ -162,6 +159,11 @@ const CASHIER_DENY: readonly IpcChannel[] = [
   // Movement ledger browsing (admin audit tool).
   'inventory_movements:list',
   'inventory_movements:count',
+  // Sales history browsing (admin audit / reporting tool — task 12.1.1).
+  // Cashiers operate the live POS; the historical sales ledger is
+  // not part of their workflow.
+  'sales:list',
+  'sales:count',
   // Supplier management (Req 6, 8.2).
   'suppliers:list',
   'suppliers:count',

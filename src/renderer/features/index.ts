@@ -11,3 +11,4 @@ export * from './backup';
 export * from './customers';
 export * from './reports';
 export * from './settings';
+export * from './users';

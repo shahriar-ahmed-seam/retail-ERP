@@ -15,6 +15,8 @@ export {
   type CreateInitialAdminResult,
 } from './auth.service.js';
 
+export { AuditService } from './audit.service.js';
+
 export {
   BackupService,
   BACKUPS_SUBDIR,

@@ -641,19 +641,19 @@ Stack:
 
 ### Phase 12 — RBAC enforcement and audit hardening
 
-- [ ] 12.1 Audit log viewer page
+- [x] 12.1 Audit log viewer page
   - `src/renderer/features/users/AuditLogPage.tsx` (or under settings): list `audit_logs` rows via `audit:list` with cursor pagination through `<VirtualizedTable>`; filters by `actionType`, `userId`, date range; Admin only
   - Wire `audit:list` and `audit:count` (companion total)
   - _Requirements: 13.1, 13.2, 13.3, 13.4, 16.1, 16.5_
 
-- [ ] 12.1.1 RBAC matrix coverage for paginated list channels
+- [x] 12.1.1 RBAC matrix coverage for paginated list channels
   - Update `src/main/permission/matrix.ts` so every paginated list channel and its `*:count` companion is explicitly registered:
     - Admin-only: `sales:list`, `sales:count`, `purchases:list`, `purchases:count`, `inventory_movements:list`, `inventory_movements:count`, `audit:list`, `audit:count`, `journal_entries:list`, `journal_entries:count`, `suppliers:list`, `suppliers:count`
     - Admin + Cashier (read-only catalog and customer browse): `products:list`, `products:count`, `customers:list`, `customers:count`
   - Property 9 (task 12.3) automatically picks these up via the `IpcContract` exhaustiveness check
   - _Requirements: 8.1, 8.2, 8.3, 8.4, 16.1_
 
-- [ ] 12.2 Role assignment auditing
+- [x] 12.2 Role assignment auditing
   - Implement `users:assignRole` (Admin only) that updates `User.roleId` and writes an `audit_logs` row of type `role.change` carrying previous role, new role, acting user, target user, timestamp — all inside one `$transaction`
   - _Requirements: 8.5, 13.2_
 
@@ -667,7 +667,7 @@ Stack:
   - **Validates: Requirement 15.2**
   - For each FK pair from Req 15.2, attempt insert/update with a non-existent foreign id; assert the operation is rejected and no row is persisted
 
-- [ ] 12.5 Checkpoint — RBAC + audit hardened
+- [x] 12.5 Checkpoint — RBAC + audit hardened
   - Cashier denied for every Admin-only channel with an audit row; Admins can review the audit log
   - Ensure all tests pass, ask the user if questions arise.
 
