@@ -32,6 +32,7 @@ import { createRoot } from 'react-dom/client';
 
 import { App } from './App';
 import { MigrationProgressPage } from './features/setup';
+import { LanguageProvider } from './i18n';
 import { AuthProvider } from './lib/auth-context';
 // Global stylesheet — pins the renderer to a light color scheme and
 // removes outer (`html` / `body`) scrollbars so internal scroll
@@ -60,15 +61,19 @@ function isMigrationProgressEntry(): boolean {
 if (isMigrationProgressEntry()) {
   createRoot(container).render(
     <StrictMode>
-      <MigrationProgressPage />
+      <LanguageProvider>
+        <MigrationProgressPage />
+      </LanguageProvider>
     </StrictMode>,
   );
 } else {
   createRoot(container).render(
     <StrictMode>
-      <AuthProvider>
-        <App />
-      </AuthProvider>
+      <LanguageProvider>
+        <AuthProvider>
+          <App />
+        </AuthProvider>
+      </LanguageProvider>
     </StrictMode>,
   );
 }

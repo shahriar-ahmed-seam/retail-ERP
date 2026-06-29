@@ -1,29 +1,12 @@
 /*
- * Global renderer stylesheet.
- *
- * Two responsibilities:
- *
- *   1. Force a light color scheme. Without `color-scheme: light` and an
- *      explicit `background`, Electron / Chromium picks up the host OS
- *      theme and renders the body dark on Windows when the user has the
- *      system theme set to "dark". The app's pages assume a white
- *      surface (form inputs, table rows, banners), so a dark host theme
- *      makes form text disappear into the inputs. The override here is
- *      the single source of truth for the renderer's base palette.
- *
- *   2. Pin the root layout to the viewport so the OS-level scrollbars
- *      do not appear on `<html>` / `<body>`. Internal scroll regions
- *      (the POS cart, virtualized tables, the audit log) own their own
- *      overflow and scroll independently. Without this, every page
- *      that grew slightly past `100vh` (typical for forms with margins)
- *      would show a vertical body scrollbar in addition to its own,
- *      and on small windows a horizontal body scrollbar would appear
- *      whenever an inner element had any negative-margin nudge.
+ * Global renderer stylesheet. Imports the design tokens, forces the light
+ * color scheme (so a dark host OS theme does not bleed through), and pins
+ * the root to the viewport so only internal regions scroll.
  */
 
+@import './theme.css';
+
 html {
-  /* Tell Chromium to render with the light scheme — affects the default
-     scrollbar / form-control / canvas backgrounds. */
   color-scheme: light;
   height: 100%;
 }
@@ -31,16 +14,10 @@ html {
 body {
   margin: 0;
   height: 100%;
-  background: #ffffff;
-  color: #1a1a1a;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
-  /* No outer scrollbar — internal scroll regions (POS cart, virtualized
-     tables, audit log) handle overflow themselves. */
   overflow: hidden;
 }
 
 #root {
   height: 100%;
-  /* Internal regions handle overflow; the root never shows scrollbars. */
-  overflow: auto;
+  overflow: hidden;
 }

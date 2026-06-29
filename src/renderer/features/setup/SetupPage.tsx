@@ -1,50 +1,25 @@
 /**
- * Initial Admin Setup screen (task 3.4, Requirements 1.6, 14.2).
- *
- * Reachable only on first run, when the renderer has just received
- * `{ required: true }` from `setup:isRequired`. The parent (`<App />`
- * in `src/renderer/index.tsx`) gates this — once an admin exists the
- * channel returns `{ required: false }` and the user is routed to the
- * login screen instead.
- *
- * Render contract:
- *   - Username text input, required, autoFocus.
- *   - Password input (`type=password`), required.
- *   - Confirm-password input (`type=password`), required.
- *   - Submit button. Disabled when:
- *       * any field is empty, OR
- *       * `password !== confirmPassword`, OR
- *       * the auth context is mid-call.
- *   - Inline mismatch hint shown beneath the confirm field as soon as
- *     the user has typed anything in either password field and the
- *     two values differ. The hint disappears the moment the values
- *     match, so a typo on the last keystroke clears as soon as it is
- *     fixed.
- *   - Server-error region populated from the most recent failed
- *     `Result` envelope. Surfaces both `error.code` and `error.message`
- *     so the most common first-run failure (the rare
- *     `FORBIDDEN { reason: admin_already_exists }` race when the gate
- *     was passed but a parallel renderer beat us to it) is legible.
- *
- * After a successful submission this page does not navigate by itself:
- * `useAuth().createInitialAdmin` stores the freshly-issued `SessionDTO`
- * in the auth context, which causes `<App />` to re-render against the
- * authenticated branch. Same pattern as `<LoginPage />`.
- *
- * Validates: Requirements 1.6, 14.2.
+ * Initial admin setup screen. Reachable only on first run when
+ * `setup:isRequired` returns true. Validates: Requirements 1.6, 14.2.
  */
 
 import { useCallback, useState, type FormEvent, type ReactElement } from 'react';
 
+import {
+  Alert,
+  Brand,
+  Button,
+  Field,
+  Input,
+  LanguageToggle,
+} from '@renderer/components/ui';
+import { useT } from '@renderer/i18n';
 import { useAuth } from '@renderer/lib/auth-context';
 
 import type { ErrorEnvelope } from '@shared/result';
 
-/**
- * Standalone setup screen. No props — the page reads everything from
- * the auth context and owns its own form state.
- */
 export function SetupPage(): ReactElement {
+  const t = useT();
   const { createInitialAdmin, isLoading } = useAuth();
 
   const [username, setUsername] = useState('');
@@ -54,9 +29,6 @@ export function SetupPage(): ReactElement {
 
   const trimmedUsername = username.trim();
   const passwordsMatch = password === confirmPassword;
-  // The mismatch hint only fires once the user has typed something in
-  // at least one password field AND the values differ. This avoids
-  // shouting "passwords do not match" at an empty form on first paint.
   const showMismatchHint =
     !passwordsMatch && (password.length > 0 || confirmPassword.length > 0);
 
@@ -70,26 +42,12 @@ export function SetupPage(): ReactElement {
   const handleSubmit = useCallback(
     (event: FormEvent<HTMLFormElement>): void => {
       event.preventDefault();
-      if (!canSubmit) {
-        return;
-      }
-
-      // Reset prior server error before issuing a fresh attempt so a
-      // transient failure (e.g. a typo) doesn't keep showing after a
-      // retry.
+      if (!canSubmit) return;
       setError(null);
-
       void (async () => {
         const result = await createInitialAdmin(trimmedUsername, password);
-        if (result.ok) {
-          // Success: the auth context has the new admin's session and
-          // the parent <App /> swaps to the authenticated tree.
-          return;
-        }
-
+        if (result.ok) return;
         setError(result.error);
-        // Clear both password fields after a failed attempt so the user
-        // re-enters them deliberately. Username is preserved.
         setPassword('');
         setConfirmPassword('');
       })();
@@ -98,142 +56,80 @@ export function SetupPage(): ReactElement {
   );
 
   return (
-    <main
-      style={{
-        fontFamily: 'system-ui, sans-serif',
-        maxWidth: '24rem',
-        margin: '4rem auto',
-        padding: '2rem',
-      }}
-    >
-      <h1 style={{ marginBottom: '0.5rem' }}>Welcome</h1>
-      <p style={{ marginBottom: '1.5rem', color: '#555' }}>
-        Create the initial administrator account to start using Core Retail
-        ERP.
-      </p>
+    <main className="auth-screen">
+      <div className="auth-screen__toggle">
+        <LanguageToggle />
+      </div>
+      <div className="auth-card card card--pad">
+        <div className="auth-card__brand">
+          <Brand />
+        </div>
+        <h1 className="auth-card__title">{t('setup.welcome')}</h1>
+        <p className="auth-card__subtitle">{t('setup.subtitle')}</p>
 
-      <form onSubmit={handleSubmit} noValidate={false}>
-        <label
-          htmlFor="setup-username"
-          style={{ display: 'block', marginBottom: '0.25rem' }}
-        >
-          Username
-        </label>
-        <input
-          id="setup-username"
-          name="username"
-          type="text"
-          autoComplete="username"
-          autoFocus
-          required
-          value={username}
-          onChange={(e) => {
-            setUsername(e.target.value);
-          }}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            marginBottom: '1rem',
-            boxSizing: 'border-box',
-          }}
-        />
+        <form onSubmit={handleSubmit}>
+          <Field label={t('auth.username')} htmlFor="setup-username">
+            <Input
+              id="setup-username"
+              name="username"
+              type="text"
+              autoComplete="username"
+              autoFocus
+              required
+              value={username}
+              onChange={(e) => {
+                setUsername(e.target.value);
+              }}
+            />
+          </Field>
 
-        <label
-          htmlFor="setup-password"
-          style={{ display: 'block', marginBottom: '0.25rem' }}
-        >
-          Password
-        </label>
-        <input
-          id="setup-password"
-          name="password"
-          type="password"
-          autoComplete="new-password"
-          required
-          value={password}
-          onChange={(e) => {
-            setPassword(e.target.value);
-          }}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            marginBottom: '1rem',
-            boxSizing: 'border-box',
-          }}
-        />
+          <Field label={t('auth.password')} htmlFor="setup-password">
+            <Input
+              id="setup-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              required
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+              }}
+            />
+          </Field>
 
-        <label
-          htmlFor="setup-confirm-password"
-          style={{ display: 'block', marginBottom: '0.25rem' }}
-        >
-          Confirm password
-        </label>
-        <input
-          id="setup-confirm-password"
-          name="confirmPassword"
-          type="password"
-          autoComplete="new-password"
-          required
-          aria-invalid={showMismatchHint}
-          aria-describedby={
-            showMismatchHint ? 'setup-confirm-password-hint' : undefined
-          }
-          value={confirmPassword}
-          onChange={(e) => {
-            setConfirmPassword(e.target.value);
-          }}
-          style={{
-            width: '100%',
-            padding: '0.5rem',
-            marginBottom: showMismatchHint ? '0.25rem' : '1.25rem',
-            boxSizing: 'border-box',
-          }}
-        />
-
-        {showMismatchHint ? (
-          <div
-            id="setup-confirm-password-hint"
-            role="status"
-            style={{
-              marginBottom: '1.25rem',
-              color: '#c33',
-              fontSize: '0.875rem',
-            }}
+          <Field
+            label={t('auth.confirmPassword')}
+            htmlFor="setup-confirm-password"
+            error={showMismatchHint ? t('setup.passwordMismatch') : null}
           >
-            Passwords do not match.
+            <Input
+              id="setup-confirm-password"
+              name="confirmPassword"
+              type="password"
+              autoComplete="new-password"
+              required
+              invalid={showMismatchHint}
+              aria-invalid={showMismatchHint}
+              value={confirmPassword}
+              onChange={(e) => {
+                setConfirmPassword(e.target.value);
+              }}
+            />
+          </Field>
+
+          <Button type="submit" block size="lg" disabled={!canSubmit} loading={isLoading}>
+            {isLoading ? t('common.saving') : t('setup.createAdmin')}
+          </Button>
+        </form>
+
+        {error !== null ? (
+          <div className="auth-card__error">
+            <Alert tone="danger" title={error.code}>
+              {error.message}
+            </Alert>
           </div>
         ) : null}
-
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          style={{
-            width: '100%',
-            padding: '0.625rem',
-            cursor: canSubmit ? 'pointer' : 'not-allowed',
-          }}
-        >
-          {isLoading ? 'Creating account…' : 'Create admin account'}
-        </button>
-      </form>
-
-      {error !== null ? (
-        <div
-          role="alert"
-          aria-live="polite"
-          style={{
-            marginTop: '1rem',
-            padding: '0.75rem',
-            border: '1px solid #c33',
-            color: '#c33',
-            background: '#fff5f5',
-            borderRadius: 4,
-          }}
-        >
-          <strong>{error.code}</strong>
-          <div>{error.message}</div>
-        </div>
-      ) : null}
+      </div>
     </main>
   );
 }

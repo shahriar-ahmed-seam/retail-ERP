@@ -33,20 +33,18 @@
 
 import { useEffect, useState, type ReactElement } from 'react';
 
+import { useT } from '@renderer/i18n';
+
 /** Height of the title bar in CSS pixels. Exported so layouts can subtract it. */
 export const TITLE_BAR_HEIGHT = 36;
 
 export interface TitleBarProps {
-  /**
-   * Optional override for the brand label. Defaults to
-   * `Core Retail ERP`. The setup / migration / login surfaces all
-   * use the default; future per-route customization can pass a
-   * different string.
-   */
+  /** Optional override for the brand label. Defaults to the Somokolon brand name. */
   readonly title?: string;
 }
 
-export function TitleBar({ title = 'Core Retail ERP' }: TitleBarProps): ReactElement {
+export function TitleBar({ title }: TitleBarProps): ReactElement {
+  const t = useT();
   const [maximized, setMaximized] = useState(false);
 
   useEffect(() => {
@@ -113,7 +111,7 @@ export function TitleBar({ title = 'Core Retail ERP' }: TitleBarProps): ReactEle
           color: '#f1f5f9',
         }}
       >
-        {title}
+        {title ?? `${t('brand.name')} · ${t('brand.tagline')}`}
       </div>
 
       <div

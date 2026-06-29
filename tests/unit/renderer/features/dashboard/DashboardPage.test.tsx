@@ -84,7 +84,7 @@ describe('<DashboardPage />', () => {
     await waitFor(() => {
       expect(
         screen.getByTestId('dashboard-card-sales-total-value'),
-      ).toHaveTextContent('1234.50');
+      ).toHaveTextContent('1,234.50');
     });
     expect(
       screen.getByTestId('dashboard-card-sales-count-value'),
